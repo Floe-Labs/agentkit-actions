@@ -123,3 +123,19 @@ export interface FloeConfig {
   lendingViewsAddress: Address;
   knownMarketIds: Bytes32[];
 }
+
+export interface ArbLeg {
+  isMultiHop: boolean;
+  tickSpacing: number;
+  tokenIn: Address;
+  tokenOut: Address;
+  amountIn: bigint;
+  minAmountOut: bigint;
+  path: `0x${string}`;
+}
+
+export interface ArbParams {
+  legs: ArbLeg[];
+  minProfit: bigint;
+  deadline: bigint;
+}

@@ -257,3 +257,143 @@ export const LiquidateLoanSchema = z.object({
       "Slippage tolerance in basis points for maxTotalRepayment calculation (default: 500 = 5%).",
     ),
 });
+
+// ── Flash Loan Action Schemas ─────────────────────────────────────────────
+
+export const GetFlashLoanFeeSchema = z.object({});
+
+export const EstimateFlashArbProfitSchema = z.object({
+  token: AddressSchema.describe(
+    "The token to flash-borrow. This is the token you start and end with (e.g. USDC address for a USDC-based arb).",
+  ),
+  amount: z
+    .string()
+    .describe(
+      "The amount to flash-borrow in raw token units (e.g. '1000000000' for 1000 USDC with 6 decimals).",
+    ),
+  legs: z
+    .array(
+      z.object({
+        tokenIn: AddressSchema.describe("Input token address for this swap leg."),
+        tokenOut: AddressSchema.describe("Output token address for this swap leg."),
+        tickSpacing: z
+          .number()
+          .describe(
+            "Aerodrome pool tick spacing (e.g. 1, 100, 200). Ignored for multi-hop legs.",
+          ),
+        amountOutMin: z
+          .string()
+          .default("0")
+          .describe(
+            "Minimum output for this leg in raw units. Use '0' to skip slippage check on estimates.",
+          ),
+      }),
+    )
+    .min(1)
+    .describe(
+      "Ordered array of swap legs. Each leg swaps tokenIn -> tokenOut via Aerodrome Slipstream. The output of each leg feeds into the next.",
+    ),
+});
+
+export const FlashLoanSchema = z.object({
+  token: AddressSchema.describe(
+    "The token to flash-borrow from Floe's lending pool.",
+  ),
+  amount: z
+    .string()
+    .describe("The amount to flash-borrow in raw token units."),
+  callbackData: z
+    .string()
+    .describe(
+      "ABI-encoded bytes to pass to the receiver's receiveFlashLoan callback. The receiver contract interprets this data to execute its strategy.",
+    ),
+});
+
+export const FlashArbSchema = z.object({
+  token: AddressSchema.describe(
+    "The token to flash-borrow for the arbitrage (e.g. USDC, WETH).",
+  ),
+  amount: z
+    .string()
+    .describe("The amount to flash-borrow in raw token units."),
+  receiverAddress: AddressSchema.optional().describe(
+    "The deployed FlashArbReceiver contract address. If omitted, uses the address from the most recent deploy_flash_arb_receiver call in this session.",
+  ),
+  legs: z
+    .array(
+      z.object({
+        tokenIn: AddressSchema.describe("Input token for this swap leg."),
+        tokenOut: AddressSchema.describe("Output token for this swap leg."),
+        tickSpacing: z
+          .number()
+          .describe(
+            "Aerodrome pool tick spacing (e.g. 1, 100, 200). Use 0 for multi-hop legs.",
+          ),
+        amountIn: z
+          .string()
+          .default("0")
+          .describe(
+            "Amount of tokenIn to swap. Use '0' to swap entire balance held by the receiver (useful for legs after the first).",
+          ),
+        minAmountOut: z
+          .string()
+          .default("0")
+          .describe(
+            "Minimum acceptable output (slippage protection). Use '0' with caution.",
+          ),
+        isMultiHop: z
+          .boolean()
+          .default(false)
+          .describe(
+            "If true, uses multi-hop routing with the encoded path.",
+          ),
+        path: z
+          .string()
+          .default("0x")
+          .describe(
+            "ABI-encoded multi-hop path for Aerodrome exactInput. Only used when isMultiHop is true.",
+          ),
+      }),
+    )
+    .min(1)
+    .describe(
+      "Ordered array of swap legs for the arbitrage route. The output of each leg feeds into the next. Final leg must output the flash-borrowed token.",
+    ),
+  minProfit: z
+    .string()
+    .default("0")
+    .describe(
+      "Minimum profit in raw token units after repaying the flash loan + fee. Transaction reverts if not met. Use '0' for no minimum (not recommended for production).",
+    ),
+  deadline: z
+    .string()
+    .optional()
+    .describe(
+      "Unix timestamp after which the swap transactions revert. Defaults to 5 minutes from now.",
+    ),
+});
+
+export const GetFlashArbBalanceSchema = z.object({
+  token: AddressSchema.describe(
+    "The ERC20 token address to check the balance of.",
+  ),
+  receiverAddress: AddressSchema.optional().describe(
+    "The FlashArbReceiver contract address to check the balance for. If omitted, uses the address from the most recent deploy_flash_arb_receiver call in this session.",
+  ),
+});
+
+// ── Deploy / Verify / Readiness Schemas ──────────────────────────────────
+
+export const DeployFlashArbReceiverSchema = z.object({});
+
+export const CheckFlashArbReadinessSchema = z.object({
+  receiverAddress: AddressSchema.optional().describe(
+    "Optional FlashArbReceiver address. If provided, also verifies the receiver's immutables and owner.",
+  ),
+});
+
+export const VerifyFlashArbReceiverSchema = z.object({
+  receiverAddress: AddressSchema.optional().describe(
+    "The FlashArbReceiver contract address to verify. If omitted, uses the address from the most recent deploy_flash_arb_receiver call in this session.",
+  ),
+});

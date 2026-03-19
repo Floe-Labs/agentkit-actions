@@ -1,21 +1,32 @@
 import {
   ActionProvider,
   CreateAction,
-  type EvmWalletProvider,
-  type Network,
+  EvmWalletProvider,
+  Network,
 } from "@coinbase/agentkit";
-import { encodeFunctionData } from "viem";
+import { encodeFunctionData, encodeDeployData } from "viem";
 import { z } from "zod";
 
 import {
   LENDING_MATCHER_ABI,
   LENDING_VIEWS_ABI,
   ERC20_ABI,
+  FLASH_ARB_RECEIVER_ABI,
+  AERODROME_QUOTER_V2_ABI,
+  AERODROME_QUOTER_V2_ADDRESS,
+  PRICE_ORACLE_ABI,
   BASE_MAINNET_MATCHER,
   BASE_MAINNET_VIEWS,
+  BASE_MAINNET_ORACLE,
+  AERODROME_SWAP_ROUTER_ADDRESS,
+  BASE_WETH_ADDRESS,
   ORACLE_PRICE_SCALE,
   BASIS_POINTS,
 } from "./constants.js";
+import {
+  FLASH_ARB_RECEIVER_BYTECODE,
+  FLASH_ARB_RECEIVER_CONSTRUCTOR_ABI,
+} from "./flashArbBytecode.js";
 import {
   GetMarketsSchema,
   GetLoanSchema,
@@ -32,8 +43,17 @@ import {
   AddCollateralSchema,
   WithdrawCollateralSchema,
   LiquidateLoanSchema,
+  GetFlashLoanFeeSchema,
+  EstimateFlashArbProfitSchema,
+  FlashLoanSchema,
+  FlashArbSchema,
+  GetFlashArbBalanceSchema,
+  DeployFlashArbReceiverSchema,
+  CheckFlashArbReadinessSchema,
+  VerifyFlashArbReceiverSchema,
 } from "./schemas.js";
 import type { FloeConfig, Address } from "./types.js";
+import { encodeAbiParameters, parseAbiParameters } from "viem";
 import {
   formatBps,
   formatTokenAmount,
@@ -49,6 +69,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
   private matcherAddress: Address;
   private viewsAddress: Address;
   private knownMarketIds: `0x${string}`[];
+  private deployedReceiverAddress: Address | null = null;
 
   constructor(config?: Partial<FloeConfig>) {
     super("floe", []);
@@ -60,6 +81,47 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
   supportsNetwork = (network: Network): boolean => {
     return network.chainId === "8453" || network.chainId === "84532";
   };
+
+  private resolveReceiverAddress(providedAddress?: string): Address {
+    const addr = providedAddress ?? this.deployedReceiverAddress;
+    if (!addr) {
+      throw new Error(
+        "No receiver address provided and no receiver deployed in this session. " +
+        "Provide a receiverAddress or run deploy_flash_arb_receiver first."
+      );
+    }
+    return addr as Address;
+  }
+
+  private async ensureAllowance(
+    walletProvider: EvmWalletProvider,
+    tokenAddress: Address,
+    spenderAddress: Address,
+    requiredAmount: bigint,
+  ): Promise<string | null> {
+    const owner = (await walletProvider.getAddress()) as Address;
+    const currentAllowance = (await walletProvider.readContract({
+      address: tokenAddress,
+      abi: ERC20_ABI,
+      functionName: "allowance",
+      args: [owner, spenderAddress],
+    })) as bigint;
+
+    if (currentAllowance >= requiredAmount) return null;
+
+    const data = encodeFunctionData({
+      abi: ERC20_ABI,
+      functionName: "approve",
+      args: [spenderAddress, requiredAmount],
+    });
+    const txHash = await walletProvider.sendTransaction({
+      to: tokenAddress,
+      data,
+    });
+
+    const meta = await resolveTokenMeta(tokenAddress, walletProvider);
+    return `Approved ${formatTokenAmount(requiredAmount, meta.decimals, meta.symbol)} to ${formatAddress(spenderAddress)} (tx: ${txHash})`;
+  }
 
   // ════════════════════════════════════════════════════════════════════════
   // READ ACTIONS (1-8)
@@ -76,7 +138,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
     args: z.infer<typeof GetMarketsSchema>,
   ): Promise<string> {
     try {
-      const ids = args.marketIds ?? this.knownMarketIds;
+      const ids = args?.marketIds?.length ? args.marketIds : this.knownMarketIds;
       if (ids.length === 0) {
         return "No market IDs provided and no known markets configured. Pass marketIds or configure knownMarketIds in the provider constructor.";
       }
@@ -588,7 +650,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
   @CreateAction({
     name: "post_lend_intent",
     description:
-      "Post a lend intent on Floe. This registers your willingness to lend at a fixed rate and terms. Unlike Aave/Compound where you deposit into a pool, Floe matches your intent to a specific borrower. You need to approve the loan token to the matcher contract before the intent can be matched.",
+      "Post a lend intent on Floe. This registers your willingness to lend at a fixed rate and terms. Unlike Aave/Compound where you deposit into a pool, Floe matches your intent to a specific borrower. The loan token is automatically approved before posting.",
     schema: PostLendIntentSchema,
   })
   async postLendIntent(
@@ -601,10 +663,29 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
       const expiry = now + BigInt(args.expirySeconds);
       const salt = `0x${[...Array(64)].map(() => Math.floor(Math.random() * 16).toString(16)).join("")}` as `0x${string}`;
 
+      const parsedAmount = BigInt(args.amount);
+
+      // Fetch market to resolve loan token for approval
+      const market = (await walletProvider.readContract({
+        address: this.matcherAddress,
+        abi: LENDING_MATCHER_ABI,
+        functionName: "getMarket",
+        args: [args.marketId as `0x${string}`],
+      })) as any;
+
+      // Auto-approve loan token with 1% buffer
+      const approvalAmount = (parsedAmount * 101n) / 100n;
+      const approvalResult = await this.ensureAllowance(
+        walletProvider,
+        market.loanToken as Address,
+        this.matcherAddress,
+        approvalAmount,
+      );
+
       const intentStruct = {
         lender: userAddress,
         onBehalfOf: userAddress,
-        amount: BigInt(args.amount),
+        amount: parsedAmount,
         minFillAmount: BigInt(args.minFillAmount),
         filledAmount: 0n,
         minInterestRateBps: BigInt(args.minInterestRateBps),
@@ -636,6 +717,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
 
       return [
         `## Lend Intent Posted\n`,
+        `- **Approval**: ${approvalResult ?? "Allowance sufficient, no approval needed"}`,
         `- **Transaction**: ${txHash}`,
         `- **Amount**: ${args.amount} (raw units)`,
         `- **Min Interest Rate**: ${formatBps(BigInt(args.minInterestRateBps))}`,
@@ -643,7 +725,6 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
         `- **Duration**: ${formatDuration(BigInt(args.minDuration))} — ${formatDuration(BigInt(args.maxDuration))}`,
         `- **Expiry**: ${formatTimestamp(expiry)}`,
         `- **Partial Fill**: ${args.allowPartialFill ? "Yes" : "No"}`,
-        `\n**Important**: You must approve the loan token to ${formatAddress(this.matcherAddress)} before this intent can be matched.`,
       ].join("\n");
     } catch (e) {
       return `Error posting lend intent: ${e instanceof Error ? e.message : String(e)}`;
@@ -653,7 +734,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
   @CreateAction({
     name: "post_borrow_intent",
     description:
-      "Post a borrow intent on Floe. This registers your request to borrow at a fixed rate and terms. You must approve the collateral token to the matcher contract before this intent can be matched.",
+      "Post a borrow intent on Floe. This registers your request to borrow at a fixed rate and terms. The collateral token is automatically approved before posting.",
     schema: PostBorrowIntentSchema,
   })
   async postBorrowIntent(
@@ -666,11 +747,30 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
       const expiry = now + BigInt(args.expirySeconds);
       const salt = `0x${[...Array(64)].map(() => Math.floor(Math.random() * 16).toString(16)).join("")}` as `0x${string}`;
 
+      const parsedCollateral = BigInt(args.collateralAmount);
+
+      // Fetch market to resolve collateral token for approval
+      const market = (await walletProvider.readContract({
+        address: this.matcherAddress,
+        abi: LENDING_MATCHER_ABI,
+        functionName: "getMarket",
+        args: [args.marketId as `0x${string}`],
+      })) as any;
+
+      // Auto-approve collateral token with 1% buffer
+      const approvalAmount = (parsedCollateral * 101n) / 100n;
+      const approvalResult = await this.ensureAllowance(
+        walletProvider,
+        market.collateralToken as Address,
+        this.matcherAddress,
+        approvalAmount,
+      );
+
       const intentStruct = {
         borrower: userAddress,
         onBehalfOf: userAddress,
         borrowAmount: BigInt(args.borrowAmount),
-        collateralAmount: BigInt(args.collateralAmount),
+        collateralAmount: parsedCollateral,
         minFillAmount: BigInt(args.minFillAmount),
         maxInterestRateBps: BigInt(args.maxInterestRateBps),
         minLtvBps: BigInt(args.minLtvBps),
@@ -700,6 +800,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
 
       return [
         `## Borrow Intent Posted\n`,
+        `- **Approval**: ${approvalResult ?? "Allowance sufficient, no approval needed"}`,
         `- **Transaction**: ${txHash}`,
         `- **Borrow Amount**: ${args.borrowAmount} (raw units)`,
         `- **Collateral**: ${args.collateralAmount} (raw units)`,
@@ -708,7 +809,6 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
         `- **Duration**: ${formatDuration(BigInt(args.minDuration))} — ${formatDuration(BigInt(args.maxDuration))}`,
         `- **Matcher Commission**: ${formatBps(BigInt(args.matcherCommissionBps))}`,
         `- **Expiry**: ${formatTimestamp(expiry)}`,
-        `\n**Important**: You must approve the collateral token to ${formatAddress(this.matcherAddress)} before this intent can be matched.`,
       ].join("\n");
     } catch (e) {
       return `Error posting borrow intent: ${e instanceof Error ? e.message : String(e)}`;
@@ -787,7 +887,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
   @CreateAction({
     name: "repay_loan",
     description:
-      "Repay a Floe loan (fully or partially). You must approve the loan token to the matcher contract before calling this. The maxTotalRepayment is calculated automatically with slippage to account for interest accruing between submission and execution.",
+      "Repay a Floe loan (fully or partially). The loan token is automatically approved and maxTotalRepayment is calculated with slippage to account for interest accruing between submission and execution.",
     schema: RepayLoanSchema,
   })
   async repayLoan(
@@ -829,6 +929,14 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
       const maxTotalRepayment =
         estimatedTotal + (estimatedTotal * slippageBps) / BASIS_POINTS;
 
+      // Auto-approve loan token for repayment
+      const approvalResult = await this.ensureAllowance(
+        walletProvider,
+        loan.loanToken as Address,
+        this.matcherAddress,
+        maxTotalRepayment,
+      );
+
       const data = encodeFunctionData({
         abi: LENDING_MATCHER_ABI,
         functionName: "repayLoan",
@@ -842,6 +950,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
 
       return [
         `## Loan Repaid\n`,
+        `- **Approval**: ${approvalResult ?? "Allowance sufficient, no approval needed"}`,
         `- **Transaction**: ${txHash}`,
         `- **Loan ID**: ${args.loanId}`,
         `- **Repay Amount**: ${formatTokenAmount(repayAmount, loanMeta.decimals, loanMeta.symbol)}`,
@@ -856,7 +965,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
   @CreateAction({
     name: "add_collateral",
     description:
-      "Add collateral to an existing Floe loan to improve its health factor and reduce liquidation risk. You must approve the collateral token to the matcher contract first.",
+      "Add collateral to an existing Floe loan to improve its health factor and reduce liquidation risk. The collateral token is automatically approved.",
     schema: AddCollateralSchema,
   })
   async addCollateral(
@@ -876,6 +985,14 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
 
       const collMeta = await resolveTokenMeta(loan.collateralToken, walletProvider);
 
+      // Auto-approve collateral token (exact amount, no buffer needed)
+      const approvalResult = await this.ensureAllowance(
+        walletProvider,
+        loan.collateralToken as Address,
+        this.matcherAddress,
+        amount,
+      );
+
       const data = encodeFunctionData({
         abi: LENDING_MATCHER_ABI,
         functionName: "addCollateral",
@@ -889,6 +1006,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
 
       return [
         `## Collateral Added\n`,
+        `- **Approval**: ${approvalResult ?? "Allowance sufficient, no approval needed"}`,
         `- **Transaction**: ${txHash}`,
         `- **Loan ID**: ${args.loanId}`,
         `- **Added**: ${formatTokenAmount(amount, collMeta.decimals, collMeta.symbol)}`,
@@ -1001,6 +1119,14 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
       const maxTotalRepayment =
         estimatedTotal + (estimatedTotal * slippageBps) / BASIS_POINTS;
 
+      // Auto-approve loan token for liquidation
+      const approvalResult = await this.ensureAllowance(
+        walletProvider,
+        loan.loanToken as Address,
+        this.matcherAddress,
+        maxTotalRepayment,
+      );
+
       const data = encodeFunctionData({
         abi: LENDING_MATCHER_ABI,
         functionName: "liquidateLoan",
@@ -1014,6 +1140,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
 
       return [
         `## Loan Liquidated\n`,
+        `- **Approval**: ${approvalResult ?? "Allowance sufficient, no approval needed"}`,
         `- **Transaction**: ${txHash}`,
         `- **Loan ID**: ${args.loanId}`,
         `- **Repay Amount**: ${formatTokenAmount(repayAmount, loanMeta.decimals, loanMeta.symbol)}`,
@@ -1022,6 +1149,645 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
       ].join("\n");
     } catch (e) {
       return `Error liquidating loan: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // FLASH LOAN ACTIONS (16-20)
+  // ════════════════════════════════════════════════════════════════════════
+
+  @CreateAction({
+    name: "get_flash_loan_fee",
+    description:
+      "Get Floe's flash loan fee. Flash loans let you borrow any token held by the protocol within a single transaction — you must repay principal + fee before the transaction ends or it reverts atomically.",
+    schema: GetFlashLoanFeeSchema,
+  })
+  async getFlashLoanFee(
+    walletProvider: EvmWalletProvider,
+    _args: z.infer<typeof GetFlashLoanFeeSchema>,
+  ): Promise<string> {
+    try {
+      const feeBps = (await walletProvider.readContract({
+        address: this.matcherAddress,
+        abi: LENDING_MATCHER_ABI,
+        functionName: "getFlashloanFeeBps",
+        args: [],
+      })) as bigint;
+
+      const feePercent = Number(feeBps) / 100;
+      return [
+        `## Flash Loan Fee\n`,
+        `- **Fee**: ${feeBps.toString()} bps (${feePercent.toFixed(2)}%)`,
+        `- **Example**: Borrowing 1,000 USDC costs ${(1000 * feePercent / 100).toFixed(2)} USDC in fees`,
+        `\nFlash loans are atomic — if you can't repay principal + fee in the same transaction, the entire transaction reverts.`,
+      ].join("\n");
+    } catch (e) {
+      return `Error fetching flash loan fee: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  @CreateAction({
+    name: "estimate_flash_arb_profit",
+    description:
+      "Estimate the profit of a flash loan arbitrage route before executing. Calls Aerodrome's on-chain QuoterV2 to simulate each swap leg and calculates net profit after the flash loan fee. Returns an estimate — actual execution may differ due to price movement.",
+    schema: EstimateFlashArbProfitSchema,
+  })
+  async estimateFlashArbProfit(
+    walletProvider: EvmWalletProvider,
+    args: z.infer<typeof EstimateFlashArbProfitSchema>,
+  ): Promise<string> {
+    try {
+      const tokenMeta = await resolveTokenMeta(args.token as Address, walletProvider);
+      const flashAmount = BigInt(args.amount);
+
+      // Get flash loan fee
+      const feeBps = (await walletProvider.readContract({
+        address: this.matcherAddress,
+        abi: LENDING_MATCHER_ABI,
+        functionName: "getFlashloanFeeBps",
+        args: [],
+      })) as bigint;
+      const feeAmount = (flashAmount * feeBps) / BASIS_POINTS;
+
+      // Simulate each leg via Aerodrome QuoterV2
+      let currentAmount = flashAmount;
+      const legResults: string[] = [];
+
+      for (let i = 0; i < args.legs.length; i++) {
+        const leg = args.legs[i];
+        const inMeta = await resolveTokenMeta(leg.tokenIn as Address, walletProvider);
+        const outMeta = await resolveTokenMeta(leg.tokenOut as Address, walletProvider);
+
+        try {
+          const quoteResult = (await walletProvider.readContract({
+            address: AERODROME_QUOTER_V2_ADDRESS,
+            abi: AERODROME_QUOTER_V2_ABI,
+            functionName: "quoteExactInputSingle",
+            args: [
+              {
+                tokenIn: leg.tokenIn as Address,
+                tokenOut: leg.tokenOut as Address,
+                amountIn: currentAmount,
+                tickSpacing: leg.tickSpacing,
+                sqrtPriceLimitX96: 0n,
+              },
+            ],
+          })) as [bigint, bigint, number, bigint];
+
+          const amountOut = quoteResult[0];
+          legResults.push(
+            `- **Leg ${i + 1}**: ${formatTokenAmount(currentAmount, inMeta.decimals, inMeta.symbol)} → ${formatTokenAmount(amountOut, outMeta.decimals, outMeta.symbol)}`,
+          );
+          currentAmount = amountOut;
+        } catch (e) {
+          legResults.push(
+            `- **Leg ${i + 1}**: ${inMeta.symbol} → ${outMeta.symbol} — **Quote failed** (pool may not exist for tick spacing ${leg.tickSpacing})`,
+          );
+          return [
+            `## Flash Arb Estimate — Failed\n`,
+            ...legResults,
+            `\nQuote failed at leg ${i + 1}. Check that the pool exists and has liquidity for the given tick spacing.`,
+          ].join("\n");
+        }
+      }
+
+      const repayment = flashAmount + feeAmount;
+      const profitRaw = currentAmount > repayment ? currentAmount - repayment : 0n;
+      const isProfitable = currentAmount > repayment;
+
+      return [
+        `## Flash Arb Profit Estimate\n`,
+        `- **Flash Borrow**: ${formatTokenAmount(flashAmount, tokenMeta.decimals, tokenMeta.symbol)}`,
+        `- **Fee**: ${formatTokenAmount(feeAmount, tokenMeta.decimals, tokenMeta.symbol)} (${formatBps(feeBps)})`,
+        `- **Repayment**: ${formatTokenAmount(repayment, tokenMeta.decimals, tokenMeta.symbol)}`,
+        ``,
+        `### Swap Route`,
+        ...legResults,
+        ``,
+        `- **Final Output**: ${formatTokenAmount(currentAmount, tokenMeta.decimals, tokenMeta.symbol)}`,
+        `- **Estimated Profit**: ${isProfitable ? formatTokenAmount(profitRaw, tokenMeta.decimals, tokenMeta.symbol) : "UNPROFITABLE — output does not cover repayment"}`,
+        `\n**Disclaimer**: This is an estimate based on current on-chain state. Actual profit may differ due to price movement, MEV, or gas costs. Gas costs are not included in this estimate.`,
+      ].join("\n");
+    } catch (e) {
+      return `Error estimating flash arb profit: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  @CreateAction({
+    name: "get_flash_arb_balance",
+    description:
+      "Check the accumulated profit balance in a FlashArbReceiver contract. After successful arbitrages, profit stays in the receiver contract until the owner sweeps it via rescueTokens().",
+    schema: GetFlashArbBalanceSchema,
+  })
+  async getFlashArbBalance(
+    walletProvider: EvmWalletProvider,
+    args: z.infer<typeof GetFlashArbBalanceSchema>,
+  ): Promise<string> {
+    try {
+      const receiverAddress = this.resolveReceiverAddress(args.receiverAddress);
+      const tokenMeta = await resolveTokenMeta(args.token as Address, walletProvider);
+
+      const balance = (await walletProvider.readContract({
+        address: args.token as Address,
+        abi: ERC20_ABI,
+        functionName: "balanceOf",
+        args: [receiverAddress],
+      })) as bigint;
+
+      // Verify it's a FlashArbReceiver by reading the owner
+      let owner: string;
+      try {
+        owner = (await walletProvider.readContract({
+          address: receiverAddress,
+          abi: FLASH_ARB_RECEIVER_ABI,
+          functionName: "owner",
+          args: [],
+        })) as string;
+      } catch {
+        return `Error: ${receiverAddress} does not appear to be a FlashArbReceiver contract (owner() call failed).`;
+      }
+
+      return [
+        `## FlashArbReceiver Balance\n`,
+        `- **Receiver**: ${formatAddress(receiverAddress)}`,
+        `- **Owner**: ${formatAddress(owner)}`,
+        `- **${tokenMeta.symbol} Balance**: ${formatTokenAmount(balance, tokenMeta.decimals, tokenMeta.symbol)}`,
+        balance > 0n
+          ? `\nProfit is available to sweep. The owner can call rescueTokens() to withdraw.`
+          : `\nNo accumulated profit for this token.`,
+      ].join("\n");
+    } catch (e) {
+      return `Error checking flash arb balance: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  @CreateAction({
+    name: "flash_loan",
+    description:
+      "Execute a raw flash loan from Floe. CRITICAL: The connected wallet (msg.sender) IS the flash loan receiver — the protocol sends tokens to msg.sender and calls receiveFlashLoan() on msg.sender. This means the connected wallet MUST be a smart contract implementing IFlashloanReceiver. EOA wallets will cause a revert. For arbitrage with an EOA wallet, use the flash_arb action instead.",
+    schema: FlashLoanSchema,
+  })
+  async flashLoan(
+    walletProvider: EvmWalletProvider,
+    args: z.infer<typeof FlashLoanSchema>,
+  ): Promise<string> {
+    try {
+      const tokenMeta = await resolveTokenMeta(args.token as Address, walletProvider);
+      const amount = BigInt(args.amount);
+      const callerAddress = await walletProvider.getAddress();
+
+      const feeBps = (await walletProvider.readContract({
+        address: this.matcherAddress,
+        abi: LENDING_MATCHER_ABI,
+        functionName: "getFlashloanFeeBps",
+        args: [],
+      })) as bigint;
+      const feeAmount = (amount * feeBps) / BASIS_POINTS;
+
+      const data = encodeFunctionData({
+        abi: LENDING_MATCHER_ABI,
+        functionName: "flashLoan",
+        args: [
+          args.token as Address,
+          amount,
+          args.callbackData as `0x${string}`,
+        ],
+      });
+
+      const txHash = await walletProvider.sendTransaction({
+        to: this.matcherAddress,
+        data,
+      });
+
+      return [
+        `## Flash Loan Submitted\n`,
+        `- **Transaction**: ${txHash}`,
+        `- **Token**: ${formatTokenAmount(amount, tokenMeta.decimals, tokenMeta.symbol)}`,
+        `- **Fee**: ${formatTokenAmount(feeAmount, tokenMeta.decimals, tokenMeta.symbol)} (${formatBps(feeBps)})`,
+        `- **Receiver (msg.sender)**: ${formatAddress(callerAddress)}`,
+        `\nThe protocol will transfer tokens to the caller, invoke receiveFlashLoan(), then pull repayment. Check the transaction receipt for details.`,
+      ].join("\n");
+    } catch (e) {
+      return `Error executing flash loan: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  @CreateAction({
+    name: "flash_arb",
+    description:
+      "Execute a flash loan arbitrage via a deployed FlashArbReceiver contract. Borrows tokens from Floe, executes a series of Aerodrome Slipstream swaps, repays the loan + fee, and retains profit in the receiver contract. The connected wallet must be the owner of the FlashArbReceiver. Use estimate_flash_arb_profit first to check profitability.",
+    schema: FlashArbSchema,
+  })
+  async flashArb(
+    walletProvider: EvmWalletProvider,
+    args: z.infer<typeof FlashArbSchema>,
+  ): Promise<string> {
+    try {
+      const receiverAddress = this.resolveReceiverAddress(args.receiverAddress);
+      const tokenMeta = await resolveTokenMeta(args.token as Address, walletProvider);
+      const amount = BigInt(args.amount);
+      const minProfit = BigInt(args.minProfit);
+      const deadline = args.deadline
+        ? BigInt(args.deadline)
+        : BigInt(Math.floor(Date.now() / 1000) + 300); // 5 minutes
+
+      // Build ArbLeg structs
+      const legs = args.legs.map((leg) => ({
+        isMultiHop: leg.isMultiHop,
+        tickSpacing: leg.tickSpacing,
+        tokenIn: leg.tokenIn as Address,
+        tokenOut: leg.tokenOut as Address,
+        amountIn: BigInt(leg.amountIn),
+        minAmountOut: BigInt(leg.minAmountOut),
+        path: (leg.path || "0x") as `0x${string}`,
+      }));
+
+      // ABI-encode ArbParams struct. The contract does abi.decode(params, (ArbParams))
+      // which is equivalent to decoding (ArbLeg[], uint256, uint256) as flat params.
+      const arbParamsEncoded = encodeAbiParameters(
+        parseAbiParameters([
+          "(bool isMultiHop, int24 tickSpacing, address tokenIn, address tokenOut, uint256 amountIn, uint256 minAmountOut, bytes path)[] legs",
+          "uint256 minProfit",
+          "uint256 deadline",
+        ]),
+        [
+          legs.map((l) => ({
+            isMultiHop: l.isMultiHop,
+            tickSpacing: l.tickSpacing,
+            tokenIn: l.tokenIn,
+            tokenOut: l.tokenOut,
+            amountIn: l.amountIn,
+            minAmountOut: l.minAmountOut,
+            path: l.path,
+          })),
+          minProfit,
+          deadline,
+        ],
+      );
+
+      // Call executeArb on the FlashArbReceiver
+      const data = encodeFunctionData({
+        abi: FLASH_ARB_RECEIVER_ABI,
+        functionName: "executeArb",
+        args: [
+          args.token as Address,
+          amount,
+          arbParamsEncoded,
+        ],
+      });
+
+      const txHash = await walletProvider.sendTransaction({
+        to: receiverAddress,
+        data,
+      });
+
+      const feeBps = (await walletProvider.readContract({
+        address: this.matcherAddress,
+        abi: LENDING_MATCHER_ABI,
+        functionName: "getFlashloanFeeBps",
+        args: [],
+      })) as bigint;
+      const feeAmount = (amount * feeBps) / BASIS_POINTS;
+
+      const legSummary = legs.map((l, i) => {
+        const inSymbol = formatAddress(l.tokenIn);
+        const outSymbol = formatAddress(l.tokenOut);
+        return `  ${i + 1}. ${inSymbol} → ${outSymbol}${l.isMultiHop ? " (multi-hop)" : ` (tick ${l.tickSpacing})`}`;
+      });
+
+      return [
+        `## Flash Arb Executed\n`,
+        `- **Transaction**: ${txHash}`,
+        `- **Flash Borrow**: ${formatTokenAmount(amount, tokenMeta.decimals, tokenMeta.symbol)}`,
+        `- **Fee**: ${formatTokenAmount(feeAmount, tokenMeta.decimals, tokenMeta.symbol)} (${formatBps(feeBps)})`,
+        `- **Min Profit**: ${formatTokenAmount(minProfit, tokenMeta.decimals, tokenMeta.symbol)}`,
+        `- **Receiver**: ${formatAddress(receiverAddress)}`,
+        `- **Deadline**: ${new Date(Number(deadline) * 1000).toUTCString()}`,
+        ``,
+        `### Route (${legs.length} legs)`,
+        ...legSummary,
+        `\nProfit remains in the receiver contract. Use get_flash_arb_balance to check, then rescueTokens() to withdraw.`,
+      ].join("\n");
+    } catch (e) {
+      return `Error executing flash arb: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // DEPLOY / VERIFY / READINESS ACTIONS (21-23)
+  // ════════════════════════════════════════════════════════════════════════
+
+  @CreateAction({
+    name: "deploy_flash_arb_receiver",
+    description:
+      "Deploy a new FlashArbReceiver contract. Runs pre-flight checks (flash loan fee, WETH liquidity, circuit breaker, SwapRouter) and aborts if any blocker is found. The connected wallet becomes the owner automatically. The deployed address is stored in session state so subsequent flash_arb / get_flash_arb_balance calls can use it without an explicit address.",
+    schema: DeployFlashArbReceiverSchema,
+  })
+  async deployFlashArbReceiver(
+    walletProvider: EvmWalletProvider,
+    _args: z.infer<typeof DeployFlashArbReceiverSchema>,
+  ): Promise<string> {
+    try {
+      const connectedWallet = (await walletProvider.getAddress()) as Address;
+      const blockers: string[] = [];
+      const checks: string[] = [];
+
+      // Pre-flight check 1: Flash loan fee
+      try {
+        const feeBps = (await walletProvider.readContract({
+          address: this.matcherAddress,
+          abi: LENDING_MATCHER_ABI,
+          functionName: "getFlashloanFeeBps",
+          args: [],
+        })) as bigint;
+        checks.push(`- Flash loan fee: ${formatBps(feeBps)} OK`);
+      } catch (e) {
+        blockers.push(`- Flash loan fee: FAILED to read (${e instanceof Error ? e.message : String(e)})`);
+      }
+
+      // Pre-flight check 2: WETH liquidity in the matcher (pool)
+      try {
+        const wethBalance = (await walletProvider.readContract({
+          address: BASE_WETH_ADDRESS,
+          abi: ERC20_ABI,
+          functionName: "balanceOf",
+          args: [this.matcherAddress],
+        })) as bigint;
+        const wethMeta = await resolveTokenMeta(BASE_WETH_ADDRESS, walletProvider);
+        if (wethBalance === 0n) {
+          blockers.push(`- WETH liquidity in matcher: 0 — no flash loans available`);
+        } else {
+          checks.push(`- WETH liquidity in matcher: ${formatTokenAmount(wethBalance, wethMeta.decimals, wethMeta.symbol)} OK`);
+        }
+      } catch (e) {
+        blockers.push(`- WETH liquidity check: FAILED (${e instanceof Error ? e.message : String(e)})`);
+      }
+
+      // Pre-flight check 3: Circuit breaker
+      try {
+        const isActive = (await walletProvider.readContract({
+          address: BASE_MAINNET_ORACLE,
+          abi: PRICE_ORACLE_ABI,
+          functionName: "isCircuitBreakerActive",
+          args: [],
+        })) as boolean;
+        if (isActive) {
+          blockers.push(`- Circuit breaker: ACTIVE — oracle is paused`);
+        } else {
+          checks.push(`- Circuit breaker: inactive OK`);
+        }
+      } catch (e) {
+        checks.push(`- Circuit breaker: could not read (non-blocking, ${e instanceof Error ? e.message : String(e)})`);
+      }
+
+      // Pre-flight check 4: SwapRouter has code
+      try {
+        await walletProvider.readContract({
+          address: AERODROME_SWAP_ROUTER_ADDRESS,
+          abi: [{ type: "function", name: "factory", inputs: [], outputs: [{ name: "", type: "address" }], stateMutability: "view" }] as const,
+          functionName: "factory",
+          args: [],
+        });
+        checks.push(`- SwapRouter (${formatAddress(AERODROME_SWAP_ROUTER_ADDRESS)}): has code OK`);
+      } catch {
+        blockers.push(`- SwapRouter (${formatAddress(AERODROME_SWAP_ROUTER_ADDRESS)}): factory() call failed — may not be deployed`);
+      }
+
+      if (blockers.length > 0) {
+        return [
+          `## Deploy FlashArbReceiver — ABORTED\n`,
+          `### Blockers`,
+          ...blockers,
+          ``,
+          `### Passed`,
+          ...checks,
+          `\nFix the blockers above before deploying.`,
+        ].join("\n");
+      }
+
+      // Deploy
+      const deployData = encodeDeployData({
+        abi: FLASH_ARB_RECEIVER_CONSTRUCTOR_ABI,
+        bytecode: FLASH_ARB_RECEIVER_BYTECODE,
+        args: [this.matcherAddress, AERODROME_SWAP_ROUTER_ADDRESS, connectedWallet],
+      });
+
+      const txHash = await walletProvider.sendTransaction({
+        to: undefined as unknown as Address,
+        data: deployData,
+      });
+
+      // Wait for receipt to get contractAddress
+      const receipt = await walletProvider.waitForTransactionReceipt(txHash);
+      const contractAddress = (receipt as any).contractAddress as Address;
+
+      if (!contractAddress) {
+        return `## Deploy FlashArbReceiver — FAILED\n\nTransaction ${txHash} was mined but no contract address in receipt. The deployment may have reverted.`;
+      }
+
+      this.deployedReceiverAddress = contractAddress;
+
+      return [
+        `## FlashArbReceiver Deployed\n`,
+        `### Pre-flight checks`,
+        ...checks,
+        ``,
+        `### Deployment`,
+        `- **Transaction**: ${txHash}`,
+        `- **Contract Address**: ${contractAddress}`,
+        `- **Owner**: ${formatAddress(connectedWallet)}`,
+        `- **Lending Protocol**: ${formatAddress(this.matcherAddress)}`,
+        `- **Swap Router**: ${formatAddress(AERODROME_SWAP_ROUTER_ADDRESS)}`,
+        `\nAddress stored in session — subsequent flash_arb and get_flash_arb_balance calls will use it automatically.`,
+      ].join("\n");
+    } catch (e) {
+      return `Error deploying FlashArbReceiver: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  @CreateAction({
+    name: "check_flash_arb_readiness",
+    description:
+      "Check whether the environment is ready for flash loan arbitrage. Verifies flash loan fee, WETH liquidity in the matcher, oracle circuit breaker status, and SwapRouter availability. If a receiverAddress is provided (or one was deployed in this session), also validates the receiver's immutables and owner.",
+    schema: CheckFlashArbReadinessSchema,
+  })
+  async checkFlashArbReadiness(
+    walletProvider: EvmWalletProvider,
+    args: z.infer<typeof CheckFlashArbReadinessSchema>,
+  ): Promise<string> {
+    try {
+      const checks: string[] = [];
+      const connectedWallet = (await walletProvider.getAddress()) as Address;
+
+      // Check 1: Flash loan fee
+      try {
+        const feeBps = (await walletProvider.readContract({
+          address: this.matcherAddress,
+          abi: LENDING_MATCHER_ABI,
+          functionName: "getFlashloanFeeBps",
+          args: [],
+        })) as bigint;
+        checks.push(`- Flash loan fee: ${formatBps(feeBps)} OK`);
+      } catch (e) {
+        checks.push(`- Flash loan fee: FAILED (${e instanceof Error ? e.message : String(e)})`);
+      }
+
+      // Check 2: WETH liquidity
+      try {
+        const wethBalance = (await walletProvider.readContract({
+          address: BASE_WETH_ADDRESS,
+          abi: ERC20_ABI,
+          functionName: "balanceOf",
+          args: [this.matcherAddress],
+        })) as bigint;
+        const wethMeta = await resolveTokenMeta(BASE_WETH_ADDRESS, walletProvider);
+        checks.push(
+          wethBalance === 0n
+            ? `- WETH liquidity in matcher: 0 WARNING`
+            : `- WETH liquidity in matcher: ${formatTokenAmount(wethBalance, wethMeta.decimals, wethMeta.symbol)} OK`,
+        );
+      } catch (e) {
+        checks.push(`- WETH liquidity check: FAILED (${e instanceof Error ? e.message : String(e)})`);
+      }
+
+      // Check 3: Circuit breaker
+      try {
+        const isActive = (await walletProvider.readContract({
+          address: BASE_MAINNET_ORACLE,
+          abi: PRICE_ORACLE_ABI,
+          functionName: "isCircuitBreakerActive",
+          args: [],
+        })) as boolean;
+        checks.push(isActive ? `- Circuit breaker: ACTIVE WARNING` : `- Circuit breaker: inactive OK`);
+      } catch (e) {
+        checks.push(`- Circuit breaker: could not read (${e instanceof Error ? e.message : String(e)})`);
+      }
+
+      // Check 4: SwapRouter
+      try {
+        await walletProvider.readContract({
+          address: AERODROME_SWAP_ROUTER_ADDRESS,
+          abi: [{ type: "function", name: "factory", inputs: [], outputs: [{ name: "", type: "address" }], stateMutability: "view" }] as const,
+          functionName: "factory",
+          args: [],
+        });
+        checks.push(`- SwapRouter: ${formatAddress(AERODROME_SWAP_ROUTER_ADDRESS)} OK`);
+      } catch {
+        checks.push(`- SwapRouter: ${formatAddress(AERODROME_SWAP_ROUTER_ADDRESS)} FAILED — factory() call failed`);
+      }
+
+      // Optional receiver checks
+      const receiverAddr = args.receiverAddress ?? this.deployedReceiverAddress;
+      if (receiverAddr) {
+        checks.push(`\n### Receiver Verification (${formatAddress(receiverAddr as string)})`);
+        try {
+          const [owner, lendingProtocol, swapRouter] = await Promise.all([
+            walletProvider.readContract({
+              address: receiverAddr as Address,
+              abi: FLASH_ARB_RECEIVER_ABI,
+              functionName: "owner",
+              args: [],
+            }) as Promise<string>,
+            walletProvider.readContract({
+              address: receiverAddr as Address,
+              abi: FLASH_ARB_RECEIVER_ABI,
+              functionName: "LENDING_PROTOCOL",
+              args: [],
+            }) as Promise<string>,
+            walletProvider.readContract({
+              address: receiverAddr as Address,
+              abi: FLASH_ARB_RECEIVER_ABI,
+              functionName: "SWAP_ROUTER",
+              args: [],
+            }) as Promise<string>,
+          ]);
+
+          const ownerMatch = owner.toLowerCase() === connectedWallet.toLowerCase();
+          const protocolMatch = lendingProtocol.toLowerCase() === this.matcherAddress.toLowerCase();
+          const routerMatch = swapRouter.toLowerCase() === AERODROME_SWAP_ROUTER_ADDRESS.toLowerCase();
+
+          checks.push(`- Owner: ${formatAddress(owner)} ${ownerMatch ? "MATCHES wallet OK" : "MISMATCH — expected " + formatAddress(connectedWallet)}`);
+          checks.push(`- LENDING_PROTOCOL: ${formatAddress(lendingProtocol)} ${protocolMatch ? "OK" : "MISMATCH — expected " + formatAddress(this.matcherAddress)}`);
+          checks.push(`- SWAP_ROUTER: ${formatAddress(swapRouter)} ${routerMatch ? "OK" : "MISMATCH — expected " + formatAddress(AERODROME_SWAP_ROUTER_ADDRESS)}`);
+        } catch (e) {
+          checks.push(`- Receiver read failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+
+      return [
+        `## Flash Arb Readiness Check\n`,
+        `**Wallet**: ${formatAddress(connectedWallet)}`,
+        `**Matcher**: ${formatAddress(this.matcherAddress)}`,
+        ``,
+        `### Environment`,
+        ...checks,
+      ].join("\n");
+    } catch (e) {
+      return `Error checking readiness: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  @CreateAction({
+    name: "verify_flash_arb_receiver",
+    description:
+      "Verify a deployed FlashArbReceiver contract. Reads owner(), LENDING_PROTOCOL(), and SWAP_ROUTER() and validates each matches expected values. Use this to confirm a receiver is correctly configured before executing arbitrage.",
+    schema: VerifyFlashArbReceiverSchema,
+  })
+  async verifyFlashArbReceiver(
+    walletProvider: EvmWalletProvider,
+    args: z.infer<typeof VerifyFlashArbReceiverSchema>,
+  ): Promise<string> {
+    try {
+      const receiverAddress = this.resolveReceiverAddress(args.receiverAddress);
+      const connectedWallet = (await walletProvider.getAddress()) as Address;
+      const issues: string[] = [];
+
+      const [owner, lendingProtocol, swapRouter] = await Promise.all([
+        walletProvider.readContract({
+          address: receiverAddress,
+          abi: FLASH_ARB_RECEIVER_ABI,
+          functionName: "owner",
+          args: [],
+        }) as Promise<string>,
+        walletProvider.readContract({
+          address: receiverAddress,
+          abi: FLASH_ARB_RECEIVER_ABI,
+          functionName: "LENDING_PROTOCOL",
+          args: [],
+        }) as Promise<string>,
+        walletProvider.readContract({
+          address: receiverAddress,
+          abi: FLASH_ARB_RECEIVER_ABI,
+          functionName: "SWAP_ROUTER",
+          args: [],
+        }) as Promise<string>,
+      ]);
+
+      const ownerMatch = owner.toLowerCase() === connectedWallet.toLowerCase();
+      const protocolMatch = lendingProtocol.toLowerCase() === this.matcherAddress.toLowerCase();
+      const routerMatch = swapRouter.toLowerCase() === AERODROME_SWAP_ROUTER_ADDRESS.toLowerCase();
+
+      if (!ownerMatch) issues.push(`Owner mismatch: ${formatAddress(owner)} (expected ${formatAddress(connectedWallet)})`);
+      if (!protocolMatch) issues.push(`LENDING_PROTOCOL mismatch: ${formatAddress(lendingProtocol)} (expected ${formatAddress(this.matcherAddress)})`);
+      if (!routerMatch) issues.push(`SWAP_ROUTER mismatch: ${formatAddress(swapRouter)} (expected ${formatAddress(AERODROME_SWAP_ROUTER_ADDRESS)})`);
+
+      const lines = [
+        `## FlashArbReceiver Verification — ${formatAddress(receiverAddress)}\n`,
+        `- **owner()**: ${formatAddress(owner)} ${ownerMatch ? "PASSED" : "FAILED"}`,
+        `- **LENDING_PROTOCOL()**: ${formatAddress(lendingProtocol)} ${protocolMatch ? "PASSED" : "FAILED"}`,
+        `- **SWAP_ROUTER()**: ${formatAddress(swapRouter)} ${routerMatch ? "PASSED" : "FAILED"}`,
+      ];
+
+      if (issues.length > 0) {
+        lines.push(`\n### ISSUES FOUND`);
+        lines.push(...issues.map((i) => `- ${i}`));
+      } else {
+        lines.push(`\nAll checks PASSED. This receiver is correctly configured for use with the connected wallet.`);
+      }
+
+      return lines.join("\n");
+    } catch (e) {
+      return `Error verifying FlashArbReceiver: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 }

@@ -8,6 +8,12 @@ export const BASE_MAINNET_VIEWS: Address =
   "0x9101027166bE205105a9E0c68d6F14f21f6c5003";
 export const BASE_SEPOLIA_MATCHER: Address =
   "0xF351eDF229ded7E2e2b23E44c70e9964CbA91B2E";
+export const BASE_MAINNET_ORACLE: Address =
+  "0xEA058a06b54dce078567f9aa4dBBE82a100210Cc";
+export const AERODROME_SWAP_ROUTER_ADDRESS: Address =
+  "0xBE6D8f0d05cC4be24d5167a3eF062215bE6D18a5";
+export const BASE_WETH_ADDRESS: Address =
+  "0x4200000000000000000000000000000000000006";
 
 // ── Protocol Constants ──────────────────────────────────────────────────────
 
@@ -42,6 +48,14 @@ export const KNOWN_TOKENS: Record<
   },
   "0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA": {
     symbol: "USDbC",
+    decimals: 6,
+  },
+  "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf": {
+    symbol: "cbBTC",
+    decimals: 8,
+  },
+  "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2": {
+    symbol: "USDT",
     decimals: 6,
   },
 };
@@ -352,6 +366,24 @@ export const LENDING_MATCHER_ABI = [
     outputs: [],
     stateMutability: "nonpayable",
   },
+  {
+    type: "function",
+    name: "getFlashloanFeeBps",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "flashLoan",
+    inputs: [
+      { name: "token", type: "address" },
+      { name: "amount", type: "uint256" },
+      { name: "data", type: "bytes" },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
 ] as const;
 
 // ── LendingViews ABI ────────────────────────────────────────────────────────
@@ -438,6 +470,100 @@ export const ERC20_ABI = [
       { name: "spender", type: "address" },
     ],
     outputs: [{ name: "", type: "uint256" }],
+    stateMutability: "view",
+  },
+] as const;
+
+// ── FlashArbReceiver ABI ──────────────────────────────────────────────────
+
+export const FLASH_ARB_RECEIVER_ABI = [
+  {
+    type: "function",
+    name: "executeArb",
+    inputs: [
+      { name: "token", type: "address" },
+      { name: "amount", type: "uint256" },
+      { name: "params", type: "bytes" },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "rescueTokens",
+    inputs: [
+      { name: "token", type: "address" },
+      { name: "to", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "owner",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "LENDING_PROTOCOL",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "SWAP_ROUTER",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }],
+    stateMutability: "view",
+  },
+] as const;
+
+// ── PriceOracle ABI ───────────────────────────────────────────────────────
+
+export const PRICE_ORACLE_ABI = [
+  {
+    type: "function",
+    name: "isCircuitBreakerActive",
+    inputs: [],
+    outputs: [{ name: "", type: "bool" }],
+    stateMutability: "view",
+  },
+] as const;
+
+// ── Aerodrome Slipstream QuoterV2 ────────────────────────────────────────
+
+export const AERODROME_QUOTER_V2_ADDRESS: Address =
+  "0x254cF9E1E6e233aa1AC962CB9B05b2cFeAAe15b0";
+
+// NOTE: quoteExactInputSingle is nonpayable on-chain (uses state mutation + revert
+// to simulate), but declared as "view" here so viem uses eth_call without issues.
+export const AERODROME_QUOTER_V2_ABI = [
+  {
+    type: "function",
+    name: "quoteExactInputSingle",
+    inputs: [
+      {
+        name: "params",
+        type: "tuple",
+        components: [
+          { name: "tokenIn", type: "address" },
+          { name: "tokenOut", type: "address" },
+          { name: "amountIn", type: "uint256" },
+          { name: "tickSpacing", type: "int24" },
+          { name: "sqrtPriceLimitX96", type: "uint160" },
+        ],
+      },
+    ],
+    outputs: [
+      { name: "amountOut", type: "uint256" },
+      { name: "sqrtPriceX96After", type: "uint160" },
+      { name: "initializedTicksCrossed", type: "uint32" },
+      { name: "gasEstimate", type: "uint256" },
+    ],
     stateMutability: "view",
   },
 ] as const;
