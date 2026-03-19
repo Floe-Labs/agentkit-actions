@@ -2,7 +2,9 @@
 
 Coinbase AgentKit ActionProvider for the [Floe](https://floelabs.xyz) DeFi lending protocol on Base.
 
-Provides 15 actions that let AI agents (LangChain, OpenAI Agents SDK, CrewAI) interact with Floe's intent-based lending protocol — making Floe a first-class verb alongside "transfer" and "swap" in any AgentKit agent.
+Provides 23 actions that let AI agents (LangChain, OpenAI Agents SDK, CrewAI) interact with Floe's intent-based lending protocol — making Floe a first-class verb alongside "transfer" and "swap" in any AgentKit agent.
+
+Also ships a **standalone CLI** (`floe-agent`) for interactive testing without any framework integration.
 
 ## Installation
 
@@ -17,34 +19,36 @@ npm install @floe/agentkit-actions @coinbase/agentkit viem zod
 │                   Agent Developer's App                      │
 │                                                             │
 │  ┌─────────────┐    ┌──────────┐    ┌────────────────────┐ │
-│  │     LLM     │───▶│ AgentKit │───▶│ FloeActionProvider │ │
-│  │ (GPT/Claude)│    │          │    │   (15 actions)     │ │
+│  │     LLM     │───>│ AgentKit │───>│ FloeActionProvider │ │
+│  │ (GPT/Claude)│    │          │    │   (23 actions)     │ │
 │  └─────────────┘    └────┬─────┘    └────────┬───────────┘ │
 │                          │                   │             │
-│                          ▼                   │             │
+│                          v                   │             │
 │                  ┌──────────────┐             │             │
-│                  │WalletProvider│◀────────────┘             │
+│                  │WalletProvider│<────────────┘             │
 │                  └──────┬───────┘  signs & sends txs       │
 │                         │                                   │
 │  ┌──────────────────────┼──────────────────────────┐       │
 │  │ Choose one:          │                          │       │
-│  │ • CdpWalletProvider  │ (prod — MPC managed keys)│       │
-│  │ • SmartWallet        │ (AA — session keys)      │       │
-│  │ • ViemWalletProvider │ (dev — raw private key)  │       │
+│  │ - CdpWalletProvider  │ (prod - MPC managed keys)│       │
+│  │ - SmartWallet        │ (AA - session keys)      │       │
+│  │ - ViemWalletProvider │ (dev - raw private key)  │       │
 │  └──────────────────────┼──────────────────────────┘       │
 └─────────────────────────┼───────────────────────────────────┘
                           │ RPC calls + signed transactions
-                          ▼
+                          v
 ┌─────────────────────────────────────────────────────────────┐
 │                    Base Mainnet (8453)                       │
 │                                                             │
-│  LendingIntentMatcher  0x17946...Bb175   ◀── write actions │
-│  LendingViews          0x9101...5003     ◀── read actions  │
-│  ERC-20 Tokens (WETH, USDC, DAI, ...)   ◀── approvals     │
+│  LendingIntentMatcher  0x17946...Bb175   <── write actions │
+│  LendingViews          0x9101...5003     <── read actions  │
+│  PriceOracle           0xEA05...10Cc     <── readiness     │
+│  Aerodrome SwapRouter  0xBE6D...18a5     <── flash arb     │
+│  ERC-20 Tokens (WETH, USDC, DAI, ...)   <── approvals     │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Flow:** User speaks to LLM → LLM picks a Floe tool → AgentKit calls FloeActionProvider → provider uses WalletProvider to read chain / sign txs → transaction hits Floe contracts on Base.
+**Flow:** User speaks to LLM -> LLM picks a Floe tool -> AgentKit calls FloeActionProvider -> provider uses WalletProvider to read chain / sign txs -> transaction hits Floe contracts on Base.
 
 ## Quick Start
 
@@ -65,9 +69,10 @@ const agentkit = await AgentKit.from({
 });
 ```
 
-## Actions
+## Actions (23 total)
 
-### Read Actions
+### Read Actions (8)
+
 | Action | Description |
 |--------|-------------|
 | `get_markets` | Get info about Floe lending markets |
@@ -79,7 +84,8 @@ const agentkit = await AgentKit.from({
 | `get_liquidation_quote` | Get profit/loss breakdown for a liquidation |
 | `get_intent_book` | Look up an on-chain intent by hash |
 
-### Write Actions
+### Write Actions (7)
+
 | Action | Description |
 |--------|-------------|
 | `post_lend_intent` | Post a fixed-rate lending offer |
@@ -89,6 +95,86 @@ const agentkit = await AgentKit.from({
 | `add_collateral` | Add collateral to improve loan health |
 | `withdraw_collateral` | Withdraw excess collateral |
 | `liquidate_loan` | Liquidate an unhealthy loan |
+
+### Flash Loan Actions (5)
+
+| Action | Description |
+|--------|-------------|
+| `get_flash_loan_fee` | Get the protocol's flash loan fee (in bps) |
+| `estimate_flash_arb_profit` | Simulate a multi-leg arb route via Aerodrome QuoterV2 |
+| `flash_loan` | Execute a raw flash loan (receiver must be a contract) |
+| `flash_arb` | Execute a flash arb via a deployed FlashArbReceiver |
+| `get_flash_arb_balance` | Check accumulated profit in a FlashArbReceiver |
+
+### Deploy / Verify / Readiness Actions (3)
+
+| Action | Description |
+|--------|-------------|
+| `deploy_flash_arb_receiver` | Deploy a new FlashArbReceiver with pre-flight checks |
+| `check_flash_arb_readiness` | Check environment readiness (fee, liquidity, oracle, router) |
+| `verify_flash_arb_receiver` | Verify a receiver's owner and immutable config |
+
+**Session state:** When you deploy via `deploy_flash_arb_receiver`, the contract address is stored on the provider instance. Subsequent calls to `flash_arb`, `get_flash_arb_balance`, and `verify_flash_arb_receiver` auto-use it if no explicit `receiverAddress` is provided. You can always override by passing an address explicitly.
+
+## CLI: `floe-agent`
+
+Interactive conversational agent for testing all 23 actions without writing any framework code.
+
+### Run directly
+
+```bash
+cd agentkit-actions
+npm run build
+npx tsx src/cli/bin.ts
+```
+
+### Or install globally
+
+```bash
+npm run build
+npm link
+floe-agent
+```
+
+### Setup flow
+
+The CLI prompts for:
+
+1. **Wallet provider** - Private Key (direct) or CDP Wallet (MPC managed)
+2. **AI provider** - OpenAI (GPT-4o), Anthropic (Claude), or Ollama (local)
+3. **RPC URL** - Custom Base Mainnet RPC (recommended for reliability)
+
+Configuration is saved to `.floe-agent.json` in the working directory and reused on subsequent runs.
+
+### Environment variables
+
+| Variable | Description |
+|----------|-------------|
+| `PRIVATE_KEY` | Wallet private key (0x...) |
+| `CDP_API_KEY_NAME` | Coinbase CDP API key name |
+| `CDP_API_KEY_PRIVATE_KEY` | Coinbase CDP API private key |
+| `OPENAI_API_KEY` | OpenAI API key |
+| `ANTHROPIC_API_KEY` | Anthropic API key |
+| `BASE_RPC_URL` | Custom Base Mainnet RPC URL |
+
+### Example session
+
+```
+You: Check flash arb readiness
+  -> Shows fee, WETH liquidity, circuit breaker, SwapRouter status
+
+You: Deploy a FlashArbReceiver for me
+  -> Pre-flight checks, deploys contract, stores address in session
+
+You: Verify my FlashArbReceiver
+  -> Validates owner/LENDING_PROTOCOL/SWAP_ROUTER (no address needed)
+
+You: Check the WETH balance in my FlashArbReceiver
+  -> Shows 0 WETH (auto-uses session address)
+
+You: Execute a flash arb: borrow 0.01 WETH, swap WETH -> USDC tick spacing 100, then USDC -> WETH tick spacing 100, min profit 0
+  -> Submits the flash arb transaction
+```
 
 ## Wallet Providers
 
@@ -117,6 +203,17 @@ floeActionProvider({
 
 - **Base Mainnet** (8453) — production
 - **Base Sepolia** (84532) — testnet
+
+## Contract Addresses (Base Mainnet)
+
+| Contract | Address |
+|----------|---------|
+| LendingIntentMatcher | `0x17946cD3e180f82e632805e5549EC913330Bb175` |
+| LendingViews | `0x9101027166bE205105a9E0c68d6F14f21f6c5003` |
+| PriceOracle | `0xEA058a06b54dce078567f9aa4dBBE82a100210Cc` |
+| Aerodrome SwapRouter | `0xBE6D8f0d05cC4be24d5167a3eF062215bE6D18a5` |
+| Aerodrome QuoterV2 | `0x254cF9E1E6e233aa1AC962CB9B05b2cFeAAe15b0` |
+| WETH | `0x4200000000000000000000000000000000000006` |
 
 ## Examples
 
@@ -148,7 +245,7 @@ const agentkit = await AgentKit.from({
   actionProviders: [floeActionProvider()], // defaults to Base Mainnet
 });
 
-// Convert AgentKit actions → Vercel AI SDK tools
+// Convert AgentKit actions -> Vercel AI SDK tools
 const actions = agentkit.getActions();
 const tools = Object.fromEntries(
   actions.map((a) => [a.name, tool({ description: a.description, parameters: a.schema, execute: (args) => a.invoke(args) })])
@@ -222,6 +319,44 @@ This is the safest way to validate what consumers will actually get. Verify cont
 ```bash
 npm pack --dry-run
 # Should only include: dist/, README.md, package.json
+```
+
+## Updating FlashArbReceiver Bytecode
+
+If the `FlashArbReceiver.sol` contract changes, regenerate the bytecode:
+
+```bash
+cd modular-lending
+forge build
+node -e "const f=require('./out/FlashArbReceiver.sol/FlashArbReceiver.json'); console.log(f.bytecode.object)"
+```
+
+Copy the output into `src/flashArbBytecode.ts` as the `FLASH_ARB_RECEIVER_BYTECODE` constant, then rebuild:
+
+```bash
+cd agentkit-actions
+npm run build
+```
+
+## Project Structure
+
+```
+src/
+  index.ts                 # Package entry point, exports floeActionProvider()
+  floeActionProvider.ts    # All 23 actions (ActionProvider class)
+  schemas.ts               # Zod schemas for every action's input
+  constants.ts             # Contract addresses, ABIs, known tokens
+  flashArbBytecode.ts      # Compiled FlashArbReceiver bytecode + constructor ABI
+  types.ts                 # TypeScript interfaces (Market, Loan, Intent, etc.)
+  utils.ts                 # Formatting helpers (bps, token amounts, addresses)
+  cli/
+    bin.ts                 # CLI entry point (#!/usr/bin/env node)
+    main.ts                # Interactive REPL loop
+    prompts.ts             # Setup flow (wallet, AI, RPC prompts)
+    walletFactory.ts       # Creates wallet provider from user selection
+    aiFactory.ts           # Creates AI model (OpenAI/Claude/Ollama)
+    config.ts              # Saves/loads .floe-agent.json
+    display.ts             # Banner, session info, help text
 ```
 
 ## How Floe Differs from Aave/Compound
