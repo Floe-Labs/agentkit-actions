@@ -2,7 +2,7 @@
 
 Coinbase AgentKit ActionProvider for the [Floe](https://floelabs.xyz) DeFi lending protocol on Base.
 
-Provides 23 actions that let AI agents (LangChain, OpenAI Agents SDK, CrewAI) interact with Floe's intent-based lending protocol — making Floe a first-class verb alongside "transfer" and "swap" in any AgentKit agent.
+Provides 23 actions that let AI agents interact with Floe's intent-based lending protocol — making Floe a first-class verb alongside "transfer" and "swap" in any AgentKit agent. Works with any framework: Vercel AI SDK, LangChain, OpenAI Agents SDK, or as an MCP server for Claude Desktop / Cursor.
 
 Also ships a **standalone CLI** (`floe-agent`) for interactive testing without any framework integration.
 
@@ -28,12 +28,13 @@ npm install @floe/agentkit-actions @coinbase/agentkit viem zod
 │                  │WalletProvider│<────────────┘             │
 │                  └──────┬───────┘  signs & sends txs       │
 │                         │                                   │
-│  ┌──────────────────────┼──────────────────────────┐       │
-│  │ Choose one:          │                          │       │
-│  │ - CdpWalletProvider  │ (prod - MPC managed keys)│       │
-│  │ - SmartWallet        │ (AA - session keys)      │       │
-│  │ - ViemWalletProvider │ (dev - raw private key)  │       │
-│  └──────────────────────┼──────────────────────────┘       │
+│  ┌──────────────────────┼──────────────────────────────┐   │
+│  │ Choose one:          │                              │   │
+│  │ - CdpV2WalletProvider│ (prod — MPC server wallet)   │   │
+│  │ - CdpSmartWallet     │ (AA — gasless on Base)       │   │
+│  │ - ViemWalletProvider │ (dev — raw private key)      │   │
+│  │ - PrivyWalletProvider│ (embedded/delegated wallets) │   │
+│  └──────────────────────┼──────────────────────────────┘   │
 └─────────────────────────┼───────────────────────────────────┘
                           │ RPC calls + signed transactions
                           v
@@ -75,26 +76,28 @@ const agentkit = await AgentKit.from({
 
 | Action | Description |
 |--------|-------------|
-| `get_markets` | Get info about Floe lending markets |
-| `get_loan` | Get detailed loan information |
-| `get_my_loans` | Get all loans for the connected wallet |
-| `check_loan_health` | Check loan health and liquidation risk |
-| `get_price` | Get oracle price for a token pair |
-| `get_accrued_interest` | Get interest accrued on a loan |
-| `get_liquidation_quote` | Get profit/loss breakdown for a liquidation |
-| `get_intent_book` | Look up an on-chain intent by hash |
+| `get_markets` | Get info about Floe lending markets (rates, LTV bounds, pause status) |
+| `get_loan` | Get detailed loan information (participants, health, time remaining) |
+| `get_my_loans` | Get all loans for the connected wallet (as lender or borrower) |
+| `check_loan_health` | Check loan health — current LTV vs liquidation threshold, buffer % |
+| `get_price` | Get oracle price for a collateral/loan token pair (Chainlink + Pyth) |
+| `get_accrued_interest` | Get interest accrued on a loan (amount, time elapsed, rate) |
+| `get_liquidation_quote` | Get profit/loss breakdown for liquidating an unhealthy loan |
+| `get_intent_book` | Look up an on-chain lend or borrow intent by hash |
 
 ### Write Actions (7)
 
 | Action | Description |
 |--------|-------------|
-| `post_lend_intent` | Post a fixed-rate lending offer |
-| `post_borrow_intent` | Post a borrow request with collateral |
+| `post_lend_intent` | Post a fixed-rate lending offer (auto-approves loan token) |
+| `post_borrow_intent` | Post a borrow request with collateral (auto-approves collateral) |
 | `match_intents` | Match a lend + borrow intent to create a loan |
-| `repay_loan` | Repay a loan (fully or partially) |
+| `repay_loan` | Repay a loan fully or partially (with slippage protection) |
 | `add_collateral` | Add collateral to improve loan health |
-| `withdraw_collateral` | Withdraw excess collateral |
-| `liquidate_loan` | Liquidate an unhealthy loan |
+| `withdraw_collateral` | Withdraw excess collateral (enforces safety buffer) |
+| `liquidate_loan` | Liquidate an unhealthy loan (currentLTV >= threshold or overdue) |
+
+All write actions **auto-approve** tokens to the LendingIntentMatcher with a 1% buffer before submitting. Repay and liquidate actions include configurable slippage protection (default 5%).
 
 ### Flash Loan Actions (5)
 
@@ -102,9 +105,11 @@ const agentkit = await AgentKit.from({
 |--------|-------------|
 | `get_flash_loan_fee` | Get the protocol's flash loan fee (in bps) |
 | `estimate_flash_arb_profit` | Simulate a multi-leg arb route via Aerodrome QuoterV2 |
-| `flash_loan` | Execute a raw flash loan (receiver must be a contract) |
+| `flash_loan` | Execute a raw flash loan (receiver must implement `IFlashloanReceiver`) |
 | `flash_arb` | Execute a flash arb via a deployed FlashArbReceiver |
 | `get_flash_arb_balance` | Check accumulated profit in a FlashArbReceiver |
+
+> **`flash_loan` vs `flash_arb`:** `flash_loan` sends tokens to `msg.sender` and calls `receiveFlashLoan()` — your connected wallet must be a smart contract. EOA wallets will revert. Use `flash_arb` instead, which routes through a pre-deployed FlashArbReceiver contract that handles repayment automatically.
 
 ### Deploy / Verify / Readiness Actions (3)
 
@@ -114,7 +119,114 @@ const agentkit = await AgentKit.from({
 | `check_flash_arb_readiness` | Check environment readiness (fee, liquidity, oracle, router) |
 | `verify_flash_arb_receiver` | Verify a receiver's owner and immutable config |
 
-**Session state:** When you deploy via `deploy_flash_arb_receiver`, the contract address is stored on the provider instance. Subsequent calls to `flash_arb`, `get_flash_arb_balance`, and `verify_flash_arb_receiver` auto-use it if no explicit `receiverAddress` is provided. You can always override by passing an address explicitly.
+### Session State
+
+When you deploy via `deploy_flash_arb_receiver`, the contract address is stored on the provider instance. Subsequent calls to `flash_arb`, `get_flash_arb_balance`, and `verify_flash_arb_receiver` auto-use it — no need to pass the address again. You can always override by passing `receiverAddress` explicitly.
+
+### Flash Arb Flow
+
+```
+1. deploy_flash_arb_receiver  →  Deploys FlashArbReceiver (stores address)
+2. check_flash_arb_readiness  →  Validates fee, liquidity, circuit breaker, router
+3. estimate_flash_arb_profit  →  Simulates arb route via Aerodrome QuoterV2
+4. flash_arb                  →  Borrows tokens → swaps via Aerodrome → repays + keeps profit
+5. get_flash_arb_balance      →  Check accumulated profit in receiver
+```
+
+Pre-flight checks on deploy: flash loan fee readable, WETH liquidity > 0, circuit breaker not active, SwapRouter has code.
+
+## Framework Integrations
+
+### Vercel AI SDK
+
+```typescript
+import { AgentKit } from "@coinbase/agentkit";
+import { getVercelAITools } from "@coinbase/agentkit-vercel-ai-sdk";
+import { generateText } from "ai";
+import { openai } from "@ai-sdk/openai";
+import { floeActionProvider } from "@floe/agentkit-actions";
+
+const agentkit = await AgentKit.from({
+  walletProvider,
+  actionProviders: [floeActionProvider()],
+});
+
+const tools = await getVercelAITools(agentkit);
+
+const { text } = await generateText({
+  model: openai("gpt-4o"),
+  tools,
+  maxSteps: 10,
+  prompt: "Check the health of loan #42",
+});
+```
+
+### LangChain
+
+```typescript
+import { getLangChainTools } from "@coinbase/agentkit-langchain";
+
+const tools = await getLangChainTools(agentkit);
+// Pass tools to a LangChain agent
+```
+
+### MCP Server (Claude Desktop / Cursor)
+
+Expose all 23 Floe actions as MCP tools using the AgentKit MCP extension:
+
+```bash
+npm install @coinbase/agentkit-model-context-protocol @modelcontextprotocol/sdk
+```
+
+```typescript
+import { AgentKit } from "@coinbase/agentkit";
+import { getMcpTools } from "@coinbase/agentkit-model-context-protocol";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { floeActionProvider } from "@floe/agentkit-actions";
+
+const agentkit = await AgentKit.from({
+  walletProvider,
+  actionProviders: [floeActionProvider()],
+});
+
+const mcpTools = await getMcpTools(agentkit);
+const server = new McpServer({ name: "floe-lending", version: "1.0.0" });
+
+// Register tools and connect
+const transport = new StdioServerTransport();
+await server.connect(transport);
+```
+
+Configure in Claude Desktop (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "floe-lending": {
+      "command": "node",
+      "args": ["path/to/floe-mcp-server.js"],
+      "env": {
+        "PRIVATE_KEY": "0x...",
+        "BASE_RPC_URL": "https://mainnet.base.org"
+      }
+    }
+  }
+}
+```
+
+This exposes all 23 actions as tools in Claude Desktop, Cursor, or any MCP-compatible client.
+
+### OpenAI Agents SDK
+
+AgentKit provides launch-day integration with OpenAI's Agents SDK. Use the `create-onchain-agent` scaffold:
+
+```bash
+npx create-onchain-agent@latest
+# Select "OpenAI Agents SDK" as framework
+```
+
+Then register `floeActionProvider()` alongside the built-in action providers.
 
 ## CLI: `floe-agent`
 
@@ -140,11 +252,22 @@ floe-agent
 
 The CLI prompts for:
 
-1. **Wallet provider** - Private Key (direct) or CDP Wallet (MPC managed)
-2. **AI provider** - OpenAI (GPT-4o), Anthropic (Claude), or Ollama (local)
-3. **RPC URL** - Custom Base Mainnet RPC (recommended for reliability)
+1. **Wallet provider** — Private Key (direct) or CDP Wallet (MPC managed)
+2. **AI provider** — OpenAI (GPT-4o), Anthropic (Claude), or Ollama (local)
+3. **RPC URL** — Custom Base Mainnet RPC (recommended for reliability)
 
-Configuration is saved to `.floe-agent.json` in the working directory and reused on subsequent runs.
+Configuration is saved to `.floe-agent.json` in the working directory and reused on subsequent runs. API keys are never cached.
+
+### CLI Commands
+
+| Command | Description |
+|---------|-------------|
+| `help` | Show available commands |
+| `wallet` | Display current wallet address |
+| `config` | Show current configuration |
+| `save` | Save current config to `.floe-agent.json` |
+| `clear` | Clear conversation history |
+| `exit` | Exit the CLI |
 
 ### Environment variables
 
@@ -180,9 +303,10 @@ You: Execute a flash arb: borrow 0.01 WETH, swap WETH -> USDC tick spacing 100, 
 
 | Provider | Use Case | Key Management | Setup |
 |----------|----------|----------------|-------|
-| `CdpWalletProvider` | **Production agents** | MPC-managed keys via Coinbase Developer Platform | `CDP_API_KEY_NAME` + `CDP_API_KEY_PRIVATE_KEY` |
-| `SmartWallet` | **Account abstraction** | Session keys, gas sponsorship | ERC-4337 smart account |
+| `CdpV2WalletProvider` | **Production agents** (recommended) | MPC server wallet via CDP API | `CDP_API_KEY_ID` + `CDP_API_KEY_SECRET` + `CDP_WALLET_SECRET` |
+| `CdpSmartWalletProvider` | **Gasless on Base** | Smart contract wallet, gas sponsorship | CDP Smart Wallet API |
 | `ViemWalletProvider` | **Development / scripting** | Raw private key in memory | `PRIVATE_KEY` env var |
+| `PrivyWalletProvider` | **Embedded wallets** | Privy delegated/embedded wallets | Privy app credentials |
 
 > **Note on Coinbase Agentic Wallet:** Coinbase's [Agentic Wallet](https://docs.cdp.coinbase.com/agentic-wallet/docs/welcome) (CLI/MPC-based, send/trade only) is a **different product** and is NOT compatible with AgentKit ActionProviders. Floe actions require a full `WalletProvider` that can sign arbitrary contract calls — use one of the providers above.
 
@@ -357,6 +481,10 @@ src/
     aiFactory.ts           # Creates AI model (OpenAI/Claude/Ollama)
     config.ts              # Saves/loads .floe-agent.json
     display.ts             # Banner, session info, help text
+examples/
+  chatbot.ts               # Vercel AI SDK + CdpWalletProvider
+  standalone.ts            # Direct action calls, no AI framework
+  .env.example             # Environment variable template
 ```
 
 ## How Floe Differs from Aave/Compound
@@ -368,3 +496,4 @@ src/
 | Term | Open-ended | Fixed duration |
 | Matching | Automatic (pool) | Solver bots match offers |
 | Liquidation | Pool absorbs bad debt | Per-loan, with incentive |
+| Flash loans | From pool reserves | From protocol with receiver contract |
