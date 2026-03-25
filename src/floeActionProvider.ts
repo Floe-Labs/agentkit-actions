@@ -4,7 +4,8 @@ import {
   EvmWalletProvider,
   Network,
 } from "@coinbase/agentkit";
-import { encodeFunctionData, encodeDeployData } from "viem";
+import { encodeFunctionData, encodeDeployData, createPublicClient, http, parseEventLogs } from "viem";
+import { base } from "viem/chains";
 import { z } from "zod";
 
 import {
@@ -22,6 +23,9 @@ import {
   BASE_WETH_ADDRESS,
   ORACLE_PRICE_SCALE,
   BASIS_POINTS,
+  LOG_LENDER_OFFER_POSTED_EVENT,
+  LOG_INTENTS_MATCHED_DETAILED_EVENT,
+  MATCHER_DEPLOYMENT_BLOCK,
 } from "./constants.js";
 import {
   FLASH_ARB_RECEIVER_BYTECODE,
@@ -51,6 +55,11 @@ import {
   DeployFlashArbReceiverSchema,
   CheckFlashArbReadinessSchema,
   VerifyFlashArbReceiverSchema,
+  RequestCreditSchema,
+  ManualMatchCreditSchema,
+  CheckCreditStatusSchema,
+  RepayCreditSchema,
+  RenewCreditLineSchema,
 } from "./schemas.js";
 import type { FloeConfig, Address } from "./types.js";
 import { encodeAbiParameters, parseAbiParameters } from "viem";
@@ -70,12 +79,20 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
   private viewsAddress: Address;
   private knownMarketIds: `0x${string}`[];
   private deployedReceiverAddress: Address | null = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private publicClient: any | null = null;
 
   constructor(config?: Partial<FloeConfig>) {
     super("floe", []);
     this.matcherAddress = config?.lendingIntentMatcherAddress ?? BASE_MAINNET_MATCHER;
     this.viewsAddress = config?.lendingViewsAddress ?? BASE_MAINNET_VIEWS;
     this.knownMarketIds = config?.knownMarketIds ?? [];
+    if (config?.rpcUrl) {
+      this.publicClient = createPublicClient({
+        chain: base,
+        transport: http(config.rpcUrl),
+      });
+    }
   }
 
   supportsNetwork = (network: Network): boolean => {
@@ -121,6 +138,71 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
 
     const meta = await resolveTokenMeta(tokenAddress, walletProvider);
     return `Approved ${formatTokenAmount(requiredAmount, meta.decimals, meta.symbol)} to ${formatAddress(spenderAddress)} (tx: ${txHash})`;
+  }
+
+  private async scanAvailableLendIntents(
+    walletProvider: EvmWalletProvider,
+    marketId: `0x${string}`,
+  ): Promise<any[]> {
+    if (!this.publicClient) {
+      throw new Error(
+        "RPC URL not configured. Pass rpcUrl in FloeConfig to browse available credit offers.",
+      );
+    }
+
+    const logs = await this.publicClient.getContractEvents({
+      address: this.matcherAddress,
+      abi: LOG_LENDER_OFFER_POSTED_EVENT,
+      eventName: "LogLenderOfferPosted",
+      args: { marketId },
+      fromBlock: MATCHER_DEPLOYMENT_BLOCK,
+      toBlock: "latest" as const,
+    });
+
+    const hashSet = new Set<`0x${string}`>();
+    for (const l of logs) {
+      hashSet.add((l as any).args.offerHash as `0x${string}`);
+    }
+    const uniqueHashes = [...hashSet];
+    if (uniqueHashes.length === 0) return [];
+
+    const now = BigInt(Math.floor(Date.now() / 1000));
+    const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+
+    const intents = await Promise.all(
+      uniqueHashes.map(async (hash) => {
+        const intent = (await walletProvider.readContract({
+          address: this.matcherAddress,
+          abi: LENDING_MATCHER_ABI,
+          functionName: "getOnChainLendIntent",
+          args: [hash],
+        })) as any;
+        return { hash, intent };
+      }),
+    );
+
+    return intents.filter(
+      ({ intent }) =>
+        intent.lender !== ZERO_ADDRESS &&
+        intent.filledAmount < intent.amount &&
+        intent.expiry > now,
+    );
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private extractLoanIdFromReceipt(receipt: any): string | null {
+    try {
+      const parsed = parseEventLogs({
+        abi: LOG_INTENTS_MATCHED_DETAILED_EVENT,
+        logs: receipt.logs ?? [],
+      });
+      if (parsed.length > 0) {
+        return (parsed[0].args as any).loanId.toString();
+      }
+    } catch {
+      // Fall through
+    }
+    return null;
   }
 
   // ════════════════════════════════════════════════════════════════════════
@@ -1788,6 +1870,613 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
       return lines.join("\n");
     } catch (e) {
       return `Error verifying FlashArbReceiver: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // CREDIT FACILITY ACTIONS (24-28)
+  // ════════════════════════════════════════════════════════════════════════
+
+  @CreateAction({
+    name: "request_credit",
+    description:
+      "Browse available credit offers for a market. Scans on-chain events and reads intent data directly from the contract. Shows how much capital is available, at what rates, and for how long. Use this to find a lend intent to match against with manual_match_credit.",
+    schema: RequestCreditSchema,
+  })
+  async requestCredit(
+    walletProvider: EvmWalletProvider,
+    args: z.infer<typeof RequestCreditSchema>,
+  ): Promise<string> {
+    try {
+      const marketId = args.marketId as `0x${string}`;
+
+      const [availableIntents, market] = await Promise.all([
+        this.scanAvailableLendIntents(walletProvider, marketId),
+        walletProvider.readContract({
+          address: this.matcherAddress,
+          abi: LENDING_MATCHER_ABI,
+          functionName: "getMarket",
+          args: [marketId],
+        }) as Promise<any>,
+      ]);
+
+      if (availableIntents.length === 0) {
+        return `## No Credit Offers Available\n\nNo open lend intents found for market ${marketId}. Try a different market or check back later.`;
+      }
+
+      const loanMeta = await resolveTokenMeta(market.loanToken, walletProvider);
+      const collateralMeta = await resolveTokenMeta(market.collateralToken, walletProvider);
+
+      let filtered = availableIntents;
+
+      if (args.minAmount) {
+        const minAmount = BigInt(args.minAmount);
+        filtered = filtered.filter(
+          ({ intent }) => intent.amount - intent.filledAmount >= minAmount,
+        );
+      }
+      if (args.maxRateBps) {
+        const maxRate = BigInt(args.maxRateBps);
+        filtered = filtered.filter(
+          ({ intent }) => intent.minInterestRateBps <= maxRate,
+        );
+      }
+
+      filtered.sort(
+        (a, b) =>
+          Number(b.intent.amount - b.intent.filledAmount) -
+          Number(a.intent.amount - a.intent.filledAmount),
+      );
+      filtered = filtered.slice(0, args.maxResults);
+
+      if (filtered.length === 0) {
+        return `## No Matching Credit Offers\n\nFound ${availableIntents.length} open offer(s) in ${loanMeta.symbol}/${collateralMeta.symbol}, but none match your filters.`;
+      }
+
+      const lines = [
+        `## Available Credit Offers — ${loanMeta.symbol}/${collateralMeta.symbol}\n`,
+        `Found ${filtered.length} offer(s):\n`,
+      ];
+
+      for (const { hash, intent } of filtered) {
+        const remaining = (intent.amount as bigint) - (intent.filledAmount as bigint);
+        lines.push(
+          `### Offer \`${hash.slice(0, 10)}…\``,
+          `- **Offer Hash**: ${hash}`,
+          `- **Lender**: ${formatAddress(intent.lender)}`,
+          `- **Available**: ${formatTokenAmount(remaining, loanMeta.decimals, loanMeta.symbol)}`,
+          `- **Min Interest Rate**: ${formatBps(intent.minInterestRateBps)}`,
+          `- **Max LTV (Liquidation Threshold)**: ${formatBps(intent.maxLtvBps)}`,
+          `- **Duration**: ${formatDuration(intent.minDuration)} — ${formatDuration(intent.maxDuration)}`,
+          `- **Expiry**: ${formatTimestamp(intent.expiry)}`,
+          `- **Partial Fill**: ${intent.allowPartialFill ? "Yes" : "No"}`,
+          `- **Grace Period**: ${intent.gracePeriod > 0n ? formatDuration(intent.gracePeriod) : "Protocol default"}`,
+          ``,
+        );
+      }
+
+      lines.push(
+        `\nTo open a credit facility, use **manual_match_credit** with the offer hash of your chosen offer.`,
+      );
+
+      return lines.join("\n");
+    } catch (e) {
+      return `Error browsing credit offers: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  @CreateAction({
+    name: "manual_match_credit",
+    description:
+      "Open a credit facility by matching against a specific lend intent. This is a two-transaction operation: (1) registers your borrow intent with automatic collateral approval, (2) matches it with the chosen lend intent to create a loan. Returns the new loan ID on success.",
+    schema: ManualMatchCreditSchema,
+  })
+  async manualMatchCredit(
+    walletProvider: EvmWalletProvider,
+    args: z.infer<typeof ManualMatchCreditSchema>,
+  ): Promise<string> {
+    try {
+      const userAddress = (await walletProvider.getAddress()) as Address;
+      const lendHash = args.lendIntentHash as `0x${string}`;
+      const marketId = args.marketId as `0x${string}`;
+      const now = BigInt(Math.floor(Date.now() / 1000));
+      const expiry = now + BigInt(args.expirySeconds);
+      const salt = `0x${[...Array(64)].map(() => Math.floor(Math.random() * 16).toString(16)).join("")}` as `0x${string}`;
+
+      // Fetch market and validate lend intent in parallel
+      const [market, lendIntent] = await Promise.all([
+        walletProvider.readContract({
+          address: this.matcherAddress,
+          abi: LENDING_MATCHER_ABI,
+          functionName: "getMarket",
+          args: [marketId],
+        }) as Promise<any>,
+        walletProvider.readContract({
+          address: this.matcherAddress,
+          abi: LENDING_MATCHER_ABI,
+          functionName: "getOnChainLendIntent",
+          args: [lendHash],
+        }) as Promise<any>,
+      ]);
+
+      if (lendIntent.lender === "0x0000000000000000000000000000000000000000") {
+        return `Lend intent ${lendHash} not found on-chain. It may have been revoked or already fully matched.`;
+      }
+
+      const remaining = (lendIntent.amount as bigint) - (lendIntent.filledAmount as bigint);
+      if (remaining < BigInt(args.borrowAmount)) {
+        const loanMeta = await resolveTokenMeta(market.loanToken, walletProvider);
+        return `Lend intent only has ${formatTokenAmount(remaining, loanMeta.decimals, loanMeta.symbol)} remaining, but you requested ${formatTokenAmount(BigInt(args.borrowAmount), loanMeta.decimals, loanMeta.symbol)}.`;
+      }
+
+      // Auto-approve collateral
+      const parsedCollateral = BigInt(args.collateralAmount);
+      const approvalAmount = (parsedCollateral * 101n) / 100n;
+      const approvalResult = await this.ensureAllowance(
+        walletProvider,
+        market.collateralToken as Address,
+        this.matcherAddress,
+        approvalAmount,
+      );
+
+      // Build borrow intent struct
+      const borrowStruct = {
+        borrower: userAddress,
+        onBehalfOf: userAddress,
+        borrowAmount: BigInt(args.borrowAmount),
+        collateralAmount: parsedCollateral,
+        minFillAmount: BigInt(args.borrowAmount),
+        maxInterestRateBps: BigInt(args.maxInterestRateBps),
+        minLtvBps: BigInt(args.minLtvBps),
+        minDuration: BigInt(args.duration),
+        maxDuration: BigInt(args.duration),
+        allowPartialFill: false,
+        validFromTimestamp: 0n,
+        matcherCommissionBps: BigInt(args.matcherCommissionBps),
+        expiry,
+        marketId,
+        salt,
+        conditions: [],
+        preHooks: [],
+        postHooks: [],
+      };
+
+      // TX 1: Register borrow intent
+      const registerData = encodeFunctionData({
+        abi: LENDING_MATCHER_ABI,
+        functionName: "registerBorrowIntent",
+        args: [borrowStruct],
+      });
+      const registerTxHash = await walletProvider.sendTransaction({
+        to: this.matcherAddress,
+        data: registerData,
+      });
+      await walletProvider.waitForTransactionReceipt(registerTxHash);
+
+      // TX 2: Match intents
+      const matchData = encodeFunctionData({
+        abi: LENDING_MATCHER_ABI,
+        functionName: "matchLoanIntents",
+        args: [
+          lendIntent,
+          "0x" as `0x${string}`,
+          borrowStruct,
+          "0x" as `0x${string}`,
+          marketId,
+          true,
+          true,
+        ],
+      });
+      const matchTxHash = await walletProvider.sendTransaction({
+        to: this.matcherAddress,
+        data: matchData,
+      });
+      const matchReceipt = await walletProvider.waitForTransactionReceipt(matchTxHash);
+
+      const loanId = this.extractLoanIdFromReceipt(matchReceipt);
+      const loanMeta = await resolveTokenMeta(market.loanToken, walletProvider);
+      const collateralMeta = await resolveTokenMeta(market.collateralToken, walletProvider);
+
+      return [
+        `## Credit Facility Opened\n`,
+        `- **Approval**: ${approvalResult ?? "Allowance sufficient, no approval needed"}`,
+        `- **Register Borrow Intent TX**: ${registerTxHash}`,
+        `- **Match TX**: ${matchTxHash}`,
+        loanId ? `- **Loan ID**: ${loanId}` : `- **Loan ID**: Check transaction receipt`,
+        `- **Borrowed**: ${formatTokenAmount(BigInt(args.borrowAmount), loanMeta.decimals, loanMeta.symbol)}`,
+        `- **Collateral**: ${formatTokenAmount(parsedCollateral, collateralMeta.decimals, collateralMeta.symbol)}`,
+        `- **Interest Rate**: up to ${formatBps(BigInt(args.maxInterestRateBps))}`,
+        `- **Duration**: ${formatDuration(BigInt(args.duration))}`,
+        loanId
+          ? `\nUse **check_credit_status** with loan ID ${loanId} to monitor your credit facility.`
+          : "",
+      ].join("\n");
+    } catch (e) {
+      return `Error opening credit facility: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  @CreateAction({
+    name: "check_credit_status",
+    description:
+      "Check the status of an active credit facility (loan). Returns a combined view of health, remaining balance, accrued interest, and time to expiry. Designed for AI agents monitoring their working capital positions.",
+    schema: CheckCreditStatusSchema,
+  })
+  async checkCreditStatus(
+    walletProvider: EvmWalletProvider,
+    args: z.infer<typeof CheckCreditStatusSchema>,
+  ): Promise<string> {
+    try {
+      const loanId = BigInt(args.loanId);
+      const [loan, currentLtv, healthy, interestData] = await Promise.all([
+        walletProvider.readContract({
+          address: this.matcherAddress,
+          abi: LENDING_MATCHER_ABI,
+          functionName: "getLoan",
+          args: [loanId],
+        }) as Promise<any>,
+        walletProvider.readContract({
+          address: this.matcherAddress,
+          abi: LENDING_MATCHER_ABI,
+          functionName: "getCurrentLtvBps",
+          args: [loanId],
+        }) as Promise<bigint>,
+        walletProvider.readContract({
+          address: this.matcherAddress,
+          abi: LENDING_MATCHER_ABI,
+          functionName: "isHealthy",
+          args: [loanId],
+        }) as Promise<boolean>,
+        walletProvider.readContract({
+          address: this.matcherAddress,
+          abi: LENDING_MATCHER_ABI,
+          functionName: "getAccruedInterest",
+          args: [loanId],
+        }) as Promise<[bigint, bigint]>,
+      ]);
+
+      if (loan.repaid) {
+        return `## Credit Facility — Loan #${args.loanId}\n\n**Status**: Fully repaid. No active credit facility.`;
+      }
+
+      const loanMeta = await resolveTokenMeta(loan.loanToken, walletProvider);
+      const collateralMeta = await resolveTokenMeta(loan.collateralToken, walletProvider);
+
+      const endTime = loan.startTime + loan.duration;
+      const graceEnd = endTime + loan.gracePeriod;
+      const now = BigInt(Math.floor(Date.now() / 1000));
+      const timeRemaining = endTime > now ? endTime - now : 0n;
+      const isOverdue = now > graceEnd;
+      const inGracePeriod = now > endTime && now <= graceEnd;
+
+      const totalDebt = loan.principal + interestData[0];
+      const distanceBps = loan.liquidationLtvBps - currentLtv;
+
+      const lines = [
+        `## Credit Facility Status — Loan #${args.loanId}\n`,
+        `### Balance`,
+        `- **Principal**: ${formatTokenAmount(loan.principal, loanMeta.decimals, loanMeta.symbol)}`,
+        `- **Accrued Interest**: ${formatTokenAmount(interestData[0], loanMeta.decimals, loanMeta.symbol)}`,
+        `- **Total Debt**: ${formatTokenAmount(totalDebt, loanMeta.decimals, loanMeta.symbol)}`,
+        `- **Collateral**: ${formatTokenAmount(loan.collateralAmount, collateralMeta.decimals, collateralMeta.symbol)}`,
+        ``,
+        `### Health`,
+        `- **Healthy**: ${healthy ? "Yes" : "NO — Liquidatable!"}`,
+        `- **Current LTV**: ${formatBps(currentLtv)}`,
+        `- **Liquidation LTV**: ${formatBps(loan.liquidationLtvBps)}`,
+        `- **Buffer**: ${formatBps(distanceBps)} (${computeHealthPercent(currentLtv, loan.liquidationLtvBps)})`,
+        ``,
+        `### Timeline`,
+        `- **Started**: ${formatTimestamp(loan.startTime)}`,
+        `- **Duration**: ${formatDuration(loan.duration)}`,
+        `- **Time Remaining**: ${timeRemaining > 0n ? formatDuration(timeRemaining) : isOverdue ? "OVERDUE" : "Expired (in grace period)"}`,
+        `- **Grace Period**: ${loan.gracePeriod > 0n ? formatDuration(loan.gracePeriod) : "Protocol default"}`,
+      ];
+
+      if (!healthy) {
+        lines.push(
+          "\n**CRITICAL**: This credit facility can be liquidated. Repay immediately or add collateral.",
+        );
+      } else if (distanceBps < 500n) {
+        lines.push(
+          "\n**Warning**: Close to liquidation threshold. Consider adding collateral.",
+        );
+      }
+
+      if (inGracePeriod) {
+        lines.push(
+          "\n**Warning**: Loan has expired and is in grace period. Repay before grace period ends to avoid overdue liquidation.",
+        );
+      } else if (isOverdue) {
+        lines.push(
+          "\n**CRITICAL**: Loan is overdue. It can be liquidated at any time.",
+        );
+      } else if (timeRemaining > 0n && timeRemaining < 86400n) {
+        lines.push(
+          "\n**Notice**: Less than 24 hours remaining. Consider repaying or renewing.",
+        );
+      }
+
+      return lines.join("\n");
+    } catch (e) {
+      return `Error checking credit status: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  @CreateAction({
+    name: "repay_credit",
+    description:
+      "Fully repay a credit facility (loan). Automatically calculates the total repayment including accrued interest, handles token approval, and executes the repayment. Always repays the full principal.",
+    schema: RepayCreditSchema,
+  })
+  async repayCredit(
+    walletProvider: EvmWalletProvider,
+    args: z.infer<typeof RepayCreditSchema>,
+  ): Promise<string> {
+    try {
+      const loanId = BigInt(args.loanId);
+      const slippageBps = BigInt(args.slippageBps);
+
+      const [loan, interestData] = await Promise.all([
+        walletProvider.readContract({
+          address: this.matcherAddress,
+          abi: LENDING_MATCHER_ABI,
+          functionName: "getLoan",
+          args: [loanId],
+        }) as Promise<any>,
+        walletProvider.readContract({
+          address: this.matcherAddress,
+          abi: LENDING_MATCHER_ABI,
+          functionName: "getAccruedInterest",
+          args: [loanId],
+        }) as Promise<[bigint, bigint]>,
+      ]);
+
+      if (loan.repaid) {
+        return `Loan #${args.loanId} is already repaid.`;
+      }
+
+      const loanMeta = await resolveTokenMeta(loan.loanToken, walletProvider);
+      const repayAmount = loan.principal;
+      const estimatedTotal = repayAmount + interestData[0];
+      const maxTotalRepayment =
+        estimatedTotal + (estimatedTotal * slippageBps) / BASIS_POINTS;
+
+      const approvalResult = await this.ensureAllowance(
+        walletProvider,
+        loan.loanToken as Address,
+        this.matcherAddress,
+        maxTotalRepayment,
+      );
+
+      const data = encodeFunctionData({
+        abi: LENDING_MATCHER_ABI,
+        functionName: "repayLoan",
+        args: [loanId, repayAmount, maxTotalRepayment],
+      });
+
+      const txHash = await walletProvider.sendTransaction({
+        to: this.matcherAddress,
+        data,
+      });
+
+      return [
+        `## Credit Facility Repaid\n`,
+        `- **Approval**: ${approvalResult ?? "Allowance sufficient, no approval needed"}`,
+        `- **Transaction**: ${txHash}`,
+        `- **Loan ID**: ${args.loanId}`,
+        `- **Principal Repaid**: ${formatTokenAmount(repayAmount, loanMeta.decimals, loanMeta.symbol)}`,
+        `- **Estimated Interest**: ${formatTokenAmount(interestData[0], loanMeta.decimals, loanMeta.symbol)}`,
+        `- **Max Total (with ${formatBps(slippageBps)} slippage)**: ${formatTokenAmount(maxTotalRepayment, loanMeta.decimals, loanMeta.symbol)}`,
+      ].join("\n");
+    } catch (e) {
+      return `Error repaying credit facility: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  @CreateAction({
+    name: "renew_credit_line",
+    description:
+      "Renew an expiring credit facility in two steps: repay the existing loan, then open a new one by matching a fresh lend intent. Executes 3 transactions: (1) repay existing loan, (2) register new borrow intent, (3) match with new lend intent. Returns both old and new loan details.",
+    schema: RenewCreditLineSchema,
+  })
+  async renewCreditLine(
+    walletProvider: EvmWalletProvider,
+    args: z.infer<typeof RenewCreditLineSchema>,
+  ): Promise<string> {
+    try {
+      const oldLoanId = BigInt(args.loanId);
+      const slippageBps = BigInt(args.slippageBps);
+
+      // ── Phase 1: Repay existing loan ──────────────────────────────────
+      const [oldLoan, interestData] = await Promise.all([
+        walletProvider.readContract({
+          address: this.matcherAddress,
+          abi: LENDING_MATCHER_ABI,
+          functionName: "getLoan",
+          args: [oldLoanId],
+        }) as Promise<any>,
+        walletProvider.readContract({
+          address: this.matcherAddress,
+          abi: LENDING_MATCHER_ABI,
+          functionName: "getAccruedInterest",
+          args: [oldLoanId],
+        }) as Promise<[bigint, bigint]>,
+      ]);
+
+      if (oldLoan.repaid) {
+        return `Loan #${args.loanId} is already repaid. Use manual_match_credit to open a new credit facility.`;
+      }
+
+      const loanMeta = await resolveTokenMeta(oldLoan.loanToken, walletProvider);
+      const repayAmount = oldLoan.principal;
+      const estimatedTotal = repayAmount + interestData[0];
+      const maxTotalRepayment =
+        estimatedTotal + (estimatedTotal * slippageBps) / BASIS_POINTS;
+
+      const repayApproval = await this.ensureAllowance(
+        walletProvider,
+        oldLoan.loanToken as Address,
+        this.matcherAddress,
+        maxTotalRepayment,
+      );
+
+      const repayData = encodeFunctionData({
+        abi: LENDING_MATCHER_ABI,
+        functionName: "repayLoan",
+        args: [oldLoanId, repayAmount, maxTotalRepayment],
+      });
+
+      const repayTxHash = await walletProvider.sendTransaction({
+        to: this.matcherAddress,
+        data: repayData,
+      });
+      await walletProvider.waitForTransactionReceipt(repayTxHash);
+
+      // ── Phase 2: Open new credit facility ─────────────────────────────
+      const userAddress = (await walletProvider.getAddress()) as Address;
+      const lendHash = args.lendIntentHash as `0x${string}`;
+      const marketId = args.marketId as `0x${string}`;
+      const now = BigInt(Math.floor(Date.now() / 1000));
+      const expiry = now + 300n; // 5 min expiry for the borrow intent
+      const salt = `0x${[...Array(64)].map(() => Math.floor(Math.random() * 16).toString(16)).join("")}` as `0x${string}`;
+
+      let newLoanId: string | null = null;
+      let registerTxHash: `0x${string}` | undefined;
+      let matchTxHash: `0x${string}` | undefined;
+
+      try {
+        const [market, lendIntent] = await Promise.all([
+          walletProvider.readContract({
+            address: this.matcherAddress,
+            abi: LENDING_MATCHER_ABI,
+            functionName: "getMarket",
+            args: [marketId],
+          }) as Promise<any>,
+          walletProvider.readContract({
+            address: this.matcherAddress,
+            abi: LENDING_MATCHER_ABI,
+            functionName: "getOnChainLendIntent",
+            args: [lendHash],
+          }) as Promise<any>,
+        ]);
+
+        if (lendIntent.lender === "0x0000000000000000000000000000000000000000") {
+          return [
+            `## Credit Line — Partial Renewal\n`,
+            `### Old Loan Repaid`,
+            `- **Repay TX**: ${repayTxHash}`,
+            `- **Loan ID**: ${args.loanId}`,
+            `- **Repay Approval**: ${repayApproval ?? "No approval needed"}`,
+            ``,
+            `### New Credit — FAILED`,
+            `Lend intent ${lendHash} not found on-chain. Use **request_credit** to find a new offer, then **manual_match_credit** to open a new credit facility.`,
+          ].join("\n");
+        }
+
+        // Auto-approve collateral
+        const parsedCollateral = BigInt(args.collateralAmount);
+        const collateralApprovalAmount = (parsedCollateral * 101n) / 100n;
+        await this.ensureAllowance(
+          walletProvider,
+          market.collateralToken as Address,
+          this.matcherAddress,
+          collateralApprovalAmount,
+        );
+
+        const borrowStruct = {
+          borrower: userAddress,
+          onBehalfOf: userAddress,
+          borrowAmount: BigInt(args.borrowAmount),
+          collateralAmount: parsedCollateral,
+          minFillAmount: BigInt(args.borrowAmount),
+          maxInterestRateBps: BigInt(args.maxInterestRateBps),
+          minLtvBps: BigInt(args.minLtvBps),
+          minDuration: BigInt(args.duration),
+          maxDuration: BigInt(args.duration),
+          allowPartialFill: false,
+          validFromTimestamp: 0n,
+          matcherCommissionBps: BigInt(args.matcherCommissionBps),
+          expiry,
+          marketId,
+          salt,
+          conditions: [],
+          preHooks: [],
+          postHooks: [],
+        };
+
+        // TX 2: Register borrow intent
+        const registerData = encodeFunctionData({
+          abi: LENDING_MATCHER_ABI,
+          functionName: "registerBorrowIntent",
+          args: [borrowStruct],
+        });
+        registerTxHash = await walletProvider.sendTransaction({
+          to: this.matcherAddress,
+          data: registerData,
+        });
+        await walletProvider.waitForTransactionReceipt(registerTxHash);
+
+        // TX 3: Match
+        const matchData = encodeFunctionData({
+          abi: LENDING_MATCHER_ABI,
+          functionName: "matchLoanIntents",
+          args: [
+            lendIntent,
+            "0x" as `0x${string}`,
+            borrowStruct,
+            "0x" as `0x${string}`,
+            marketId,
+            true,
+            true,
+          ],
+        });
+        matchTxHash = await walletProvider.sendTransaction({
+          to: this.matcherAddress,
+          data: matchData,
+        });
+        const matchReceipt = await walletProvider.waitForTransactionReceipt(matchTxHash);
+        newLoanId = this.extractLoanIdFromReceipt(matchReceipt);
+      } catch (matchError) {
+        return [
+          `## Credit Line — Partial Renewal\n`,
+          `### Old Loan Repaid`,
+          `- **Repay TX**: ${repayTxHash}`,
+          `- **Loan ID**: ${args.loanId}`,
+          ``,
+          `### New Credit — FAILED`,
+          `Error during new credit setup: ${matchError instanceof Error ? matchError.message : String(matchError)}`,
+          registerTxHash ? `- **Register Borrow Intent TX**: ${registerTxHash}` : "",
+          `\nThe old loan was repaid successfully. Use **manual_match_credit** to retry opening a new credit facility.`,
+        ]
+          .filter(Boolean)
+          .join("\n");
+      }
+
+      const collateralMeta = await resolveTokenMeta(oldLoan.collateralToken, walletProvider);
+
+      return [
+        `## Credit Line Renewed\n`,
+        `### Old Loan Repaid`,
+        `- **Repay TX**: ${repayTxHash}`,
+        `- **Old Loan ID**: ${args.loanId}`,
+        `- **Principal Repaid**: ${formatTokenAmount(repayAmount, loanMeta.decimals, loanMeta.symbol)}`,
+        `- **Repay Approval**: ${repayApproval ?? "No approval needed"}`,
+        ``,
+        `### New Credit Facility Opened`,
+        `- **Register Borrow Intent TX**: ${registerTxHash}`,
+        `- **Match TX**: ${matchTxHash}`,
+        newLoanId ? `- **New Loan ID**: ${newLoanId}` : `- **New Loan ID**: Check transaction receipt`,
+        `- **Borrowed**: ${formatTokenAmount(BigInt(args.borrowAmount), loanMeta.decimals, loanMeta.symbol)}`,
+        `- **Collateral**: ${formatTokenAmount(BigInt(args.collateralAmount), collateralMeta.decimals, collateralMeta.symbol)}`,
+        `- **Interest Rate**: up to ${formatBps(BigInt(args.maxInterestRateBps))}`,
+        `- **Duration**: ${formatDuration(BigInt(args.duration))}`,
+        newLoanId
+          ? `\nUse **check_credit_status** with loan ID ${newLoanId} to monitor your new credit facility.`
+          : "",
+      ].join("\n");
+    } catch (e) {
+      return `Error renewing credit line: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 }

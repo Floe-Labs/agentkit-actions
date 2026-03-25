@@ -397,3 +397,103 @@ export const VerifyFlashArbReceiverSchema = z.object({
     "The FlashArbReceiver contract address to verify. If omitted, uses the address from the most recent deploy_flash_arb_receiver call in this session.",
   ),
 });
+
+// ── Credit Facility Action Schemas ────────────────────────────────────────
+
+export const RequestCreditSchema = z.object({
+  marketId: Bytes32Schema.describe(
+    "The market ID to search for available credit offers.",
+  ),
+  minAmount: z
+    .string()
+    .optional()
+    .describe(
+      "Minimum remaining amount in raw token units. Filters out small offers.",
+    ),
+  maxRateBps: z
+    .string()
+    .optional()
+    .describe(
+      "Maximum acceptable interest rate in basis points. Only shows offers at or below this rate.",
+    ),
+  maxResults: z
+    .number()
+    .default(10)
+    .describe("Maximum number of offers to return (default: 10)."),
+});
+
+export const ManualMatchCreditSchema = z.object({
+  lendIntentHash: Bytes32Schema.describe(
+    "The on-chain hash of the lend intent to match against (from request_credit results).",
+  ),
+  borrowAmount: z.string().describe("Amount to borrow in raw token units."),
+  collateralAmount: z
+    .string()
+    .describe("Collateral to post in raw token units."),
+  maxInterestRateBps: z
+    .string()
+    .describe(
+      "Maximum acceptable annual interest rate in basis points.",
+    ),
+  minLtvBps: z
+    .string()
+    .describe("Minimum LTV ratio in basis points for the loan."),
+  duration: z.string().describe("Loan duration in seconds."),
+  marketId: Bytes32Schema.describe("Market ID for the credit facility."),
+  matcherCommissionBps: z
+    .string()
+    .default("50")
+    .describe(
+      "Commission for the matcher in basis points (default: 50 = 0.50%).",
+    ),
+  expirySeconds: z
+    .string()
+    .default("300")
+    .describe(
+      "Borrow intent validity in seconds (default: 300 = 5 min, short since it's immediately matched).",
+    ),
+});
+
+export const CheckCreditStatusSchema = z.object({
+  loanId: z
+    .string()
+    .describe("The loan ID of the credit facility to check."),
+});
+
+export const RepayCreditSchema = z.object({
+  loanId: z
+    .string()
+    .describe("The loan ID of the credit facility to repay."),
+  slippageBps: z
+    .string()
+    .default("500")
+    .describe(
+      "Slippage tolerance in basis points for interest accrual between submission and execution (default: 500 = 5%).",
+    ),
+});
+
+export const RenewCreditLineSchema = z.object({
+  loanId: z.string().describe("The existing loan ID to repay."),
+  lendIntentHash: Bytes32Schema.describe(
+    "The lend intent hash to match for the new credit line.",
+  ),
+  borrowAmount: z
+    .string()
+    .describe("New borrow amount in raw token units."),
+  collateralAmount: z
+    .string()
+    .describe("New collateral amount in raw token units."),
+  maxInterestRateBps: z
+    .string()
+    .describe("Max interest rate for the new loan in basis points."),
+  minLtvBps: z
+    .string()
+    .describe("Min LTV for the new loan in basis points."),
+  duration: z.string().describe("New loan duration in seconds."),
+  marketId: Bytes32Schema.describe("Market ID for the new credit line."),
+  matcherCommissionBps: z.string().default("50"),
+  slippageBps: z
+    .string()
+    .default("500")
+    .describe("Slippage for the repayment step."),
+});

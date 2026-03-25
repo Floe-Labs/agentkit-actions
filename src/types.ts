@@ -122,6 +122,7 @@ export interface FloeConfig {
   lendingIntentMatcherAddress: Address;
   lendingViewsAddress: Address;
   knownMarketIds: Bytes32[];
+  rpcUrl?: string;
 }
 
 export interface ArbLeg {

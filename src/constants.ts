@@ -534,6 +534,38 @@ export const PRICE_ORACLE_ABI = [
   },
 ] as const;
 
+// ── Event ABIs (for log scanning & receipt parsing) ───────────────────────
+
+export const LOG_LENDER_OFFER_POSTED_EVENT = [
+  {
+    type: "event" as const,
+    name: "LogLenderOfferPosted",
+    inputs: [
+      { name: "lender", type: "address", indexed: true },
+      { name: "marketId", type: "bytes32", indexed: true },
+      { name: "offerHash", type: "bytes32", indexed: false },
+    ],
+  },
+] as const;
+
+export const LOG_INTENTS_MATCHED_DETAILED_EVENT = [
+  {
+    type: "event" as const,
+    name: "LogIntentsMatchedDetailed",
+    inputs: [
+      { name: "lender", type: "address", indexed: true },
+      { name: "borrower", type: "address", indexed: true },
+      { name: "matcher", type: "address", indexed: true },
+      { name: "marketId", type: "bytes32", indexed: false },
+      { name: "loanId", type: "uint256", indexed: false },
+      { name: "lendIntentHash", type: "bytes32", indexed: false },
+      { name: "borrowIntentHash", type: "bytes32", indexed: false },
+    ],
+  },
+] as const;
+
+export const MATCHER_DEPLOYMENT_BLOCK = 40499040n;
+
 // ── Aerodrome Slipstream QuoterV2 ────────────────────────────────────────
 
 export const AERODROME_QUOTER_V2_ADDRESS: Address =
