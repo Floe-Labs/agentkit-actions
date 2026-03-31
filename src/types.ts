@@ -123,6 +123,8 @@ export interface FloeConfig {
   lendingViewsAddress: Address;
   knownMarketIds: Bytes32[];
   rpcUrl?: string;
+  envioEndpoint?: string;
+  envioApiToken?: string;
 }
 
 export interface ArbLeg {
