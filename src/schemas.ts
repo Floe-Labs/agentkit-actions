@@ -497,3 +497,53 @@ export const RenewCreditLineSchema = z.object({
     .default("500")
     .describe("Slippage for the repayment step."),
 });
+
+// ── v2 Credit Actions (SDK-backed) ──────────────────────────────────────
+
+export const InstantBorrowSchema = z.object({
+  marketId: Bytes32Schema.describe(
+    "The market ID (loan token + collateral token pair).",
+  ),
+  borrowAmount: z
+    .string()
+    .describe("Amount to borrow in raw token units."),
+  collateralAmount: z
+    .string()
+    .describe("Collateral to post in raw token units."),
+  maxInterestRateBps: z
+    .string()
+    .describe("Max acceptable annual interest rate in basis points."),
+  duration: z
+    .string()
+    .describe("Loan duration in seconds."),
+  minLtvBps: z
+    .string()
+    .default("8000")
+    .describe("Minimum LTV in basis points (default: 8000 = 80%)."),
+});
+
+export const RenewCreditLineV2Schema = z.object({
+  loanId: z
+    .string()
+    .describe("The existing loan ID to repay and renew."),
+  newBorrowAmount: z
+    .string()
+    .optional()
+    .describe("New borrow amount in raw token units. If omitted, uses the same amount as the existing loan."),
+  newCollateralAmount: z
+    .string()
+    .optional()
+    .describe("New collateral amount. If omitted, uses the same as the existing loan."),
+  maxInterestRateBps: z
+    .string()
+    .optional()
+    .describe("Max interest rate for the new loan. If omitted, uses the existing loan's rate."),
+  duration: z
+    .string()
+    .optional()
+    .describe("New loan duration in seconds. If omitted, uses the existing loan's duration."),
+  slippageBps: z
+    .string()
+    .default("500")
+    .describe("Slippage for the repayment step (default: 500 = 5%)."),
+});
