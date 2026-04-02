@@ -2,14 +2,14 @@
 
 Coinbase AgentKit ActionProvider for the [Floe](https://floelabs.xyz) DeFi lending protocol on Base.
 
-Provides 23 actions that let AI agents interact with Floe's intent-based lending protocol — making Floe a first-class verb alongside "transfer" and "swap" in any AgentKit agent. Works with any framework: Vercel AI SDK, LangChain, OpenAI Agents SDK, or as an MCP server for Claude Desktop / Cursor.
+Provides **30+ actions** for AI agents: DeFi lending, instant credit facilities, flash loan arbitrage, and x402 API payments. Works with any framework: Vercel AI SDK, LangChain, OpenAI Agents SDK, or as an MCP server for Claude Desktop / Cursor.
 
 Also ships a **standalone CLI** (`floe-agent`) for interactive testing without any framework integration.
 
 ## Installation
 
 ```bash
-npm install @floe/agentkit-actions @coinbase/agentkit viem zod
+npm install floe-agent @coinbase/agentkit viem zod
 ```
 
 ## Architecture
@@ -20,7 +20,7 @@ npm install @floe/agentkit-actions @coinbase/agentkit viem zod
 │                                                             │
 │  ┌─────────────┐    ┌──────────┐    ┌────────────────────┐ │
 │  │     LLM     │───>│ AgentKit │───>│ FloeActionProvider │ │
-│  │ (GPT/Claude)│    │          │    │   (23 actions)     │ │
+│  │ (GPT/Claude)│    │          │    │   (30+ actions)     │ │
 │  └─────────────┘    └────┬─────┘    └────────┬───────────┘ │
 │                          │                   │             │
 │                          v                   │             │
@@ -110,6 +110,18 @@ All write actions **auto-approve** tokens to the LendingIntentMatcher with a 1% 
 | `get_flash_arb_balance` | Check accumulated profit in a FlashArbReceiver |
 
 > **`flash_loan` vs `flash_arb`:** `flash_loan` sends tokens to `msg.sender` and calls `receiveFlashLoan()` — your connected wallet must be a smart contract. EOA wallets will revert. Use `flash_arb` instead, which routes through a pre-deployed FlashArbReceiver contract that handles repayment automatically.
+
+### Credit Facility Actions (5)
+
+| Action | Description |
+|--------|-------------|
+| `instant_borrow` | Borrow USDC instantly — auto-selects best lender, handles approval + register + match in one call |
+| `repay_and_reborrow` | Repay an existing loan and instantly borrow again. If reborrow fails, repayment still succeeds |
+| `check_credit_status` | Loan health, balance, accrued interest, time to expiry, early repayment terms |
+| `request_credit` | Browse available credit offers — rates, amounts, durations |
+| `manual_match_credit` | Match with a specific lend intent (register + match) |
+
+> **`instant_borrow` vs `manual_match_credit`:** Use `instant_borrow` for one-call capital. Use `request_credit` + `manual_match_credit` if you want to pick a specific lender.
 
 ### Deploy / Verify / Readiness Actions (3)
 
@@ -215,7 +227,7 @@ Configure in Claude Desktop (`claude_desktop_config.json`):
 }
 ```
 
-This exposes all 23 actions as tools in Claude Desktop, Cursor, or any MCP-compatible client.
+This exposes all 30+ actions as tools in Claude Desktop, Cursor, or any MCP-compatible client.
 
 ### OpenAI Agents SDK
 
@@ -230,7 +242,7 @@ Then register `floeActionProvider()` alongside the built-in action providers.
 
 ## CLI: `floe-agent`
 
-Interactive conversational agent for testing all 23 actions without writing any framework code.
+Interactive conversational agent for testing all 30+ actions without writing any framework code.
 
 ### Run directly
 
@@ -467,7 +479,7 @@ npm run build
 ```
 src/
   index.ts                 # Package entry point, exports floeActionProvider()
-  floeActionProvider.ts    # All 23 actions (ActionProvider class)
+  floeActionProvider.ts    # All 30+ actions (ActionProvider class)
   schemas.ts               # Zod schemas for every action's input
   constants.ts             # Contract addresses, ABIs, known tokens
   flashArbBytecode.ts      # Compiled FlashArbReceiver bytecode + constructor ABI
