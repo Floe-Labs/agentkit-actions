@@ -184,6 +184,11 @@ export const PostBorrowIntentSchema = z.object({
     .describe(
       "How long the intent remains valid, in seconds from now (default: 86400 = 24 hours).",
     ),
+  onBehalfOf: AddressSchema
+    .optional()
+    .describe(
+      "Optional address to receive loan proceeds instead of your wallet. If omitted, USDC is sent to your address.",
+    ),
 });
 
 export const MatchIntentsSchema = z.object({
@@ -520,6 +525,11 @@ export const InstantBorrowSchema = z.object({
     .string()
     .default("8000")
     .describe("Minimum LTV in basis points (default: 8000 = 80%)."),
+  onBehalfOf: AddressSchema
+    .optional()
+    .describe(
+      "Optional address to receive borrowed USDC. If omitted, sent to your wallet.",
+    ),
 });
 
 export const RenewCreditLineV2Schema = z.object({
@@ -546,4 +556,9 @@ export const RenewCreditLineV2Schema = z.object({
     .string()
     .default("500")
     .describe("Slippage for the repayment step (default: 500 = 5%)."),
+  onBehalfOf: AddressSchema
+    .optional()
+    .describe(
+      "Optional address to receive USDC on the new loan. If omitted, sent to your wallet.",
+    ),
 });

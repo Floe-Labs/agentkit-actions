@@ -867,9 +867,10 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
         approvalAmount,
       );
 
+      const onBehalfOf = (args.onBehalfOf ?? userAddress) as Address;
       const intentStruct = {
         borrower: userAddress,
-        onBehalfOf: userAddress,
+        onBehalfOf,
         borrowAmount: BigInt(args.borrowAmount),
         collateralAmount: parsedCollateral,
         minFillAmount: BigInt(args.minFillAmount),
@@ -910,7 +911,8 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
         `- **Duration**: ${formatDuration(BigInt(args.minDuration))} — ${formatDuration(BigInt(args.maxDuration))}`,
         `- **Matcher Commission**: ${formatBps(BigInt(args.matcherCommissionBps))}`,
         `- **Expiry**: ${formatTimestamp(expiry)}`,
-      ].join("\n");
+        onBehalfOf !== userAddress ? `- **USDC Sent To**: ${formatAddress(onBehalfOf)}` : "",
+      ].filter(Boolean).join("\n");
     } catch (e) {
       return `Error posting borrow intent: ${e instanceof Error ? e.message : String(e)}`;
     }
@@ -2547,6 +2549,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
         maxInterestRateBps: BigInt(args.maxInterestRateBps),
         duration: BigInt(args.duration),
         minLtvBps: BigInt(args.minLtvBps),
+        onBehalfOf: args.onBehalfOf as `0x${string}` | undefined,
       });
 
       return [
@@ -2560,6 +2563,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
         `- **Register Borrow TX**: ${result.registerBorrowTxHash}`,
         `- **Match TX**: ${result.matchTxHash}`,
         `- **Lend Intent Matched**: ${result.lendIntentHash}`,
+        args.onBehalfOf ? `- **USDC Sent To**: ${formatAddress(args.onBehalfOf)}` : "",
         `\nUse **check_credit_status** with loan ID ${result.loanId} to monitor your credit facility.`,
       ].join("\n");
     } catch (e: any) {
@@ -2592,6 +2596,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
         maxInterestRateBps: args.maxInterestRateBps ? BigInt(args.maxInterestRateBps) : undefined,
         duration: args.duration ? BigInt(args.duration) : undefined,
         repaySlippageBps: BigInt(args.slippageBps),
+        onBehalfOf: args.onBehalfOf as `0x${string}` | undefined,
       });
 
       const lines = [
