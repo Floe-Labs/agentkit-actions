@@ -217,7 +217,8 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
       });
 
       // Step 3: Approve collateral token spending
-      const approvalAmount = borrowLimitRaw * 10n; // generous approval
+      // Max approval — agent controls exposure via operator delegation limits
+      const approvalAmount = BigInt("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"); // type(uint256).max
       const approveTxHash = await this.ensureAllowance(
         walletProvider,
         args.collateralToken as Address,
