@@ -70,7 +70,7 @@ const agentkit = await AgentKit.from({
 });
 ```
 
-## Actions (29 total: 23 lending + 6 x402)
+## Actions (36 total: 30 lending + 6 x402)
 
 ### Read Actions (8)
 

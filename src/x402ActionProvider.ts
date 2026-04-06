@@ -41,6 +41,12 @@ export const GrantCreditDelegationSchema = z.object({
   collateralToken: AddressSchema
     .refine((v) => KNOWN_COLLATERAL[v.toLowerCase()] === true, "Must be WETH or cbBTC")
     .describe("Collateral token address (WETH or cbBTC)"),
+  collateralApproval: NonNegIntString.optional()
+    .describe(
+      "Optional bounded collateral allowance to grant the matcher (raw token units). " +
+      "If omitted, an unlimited approval is set (matches standard DeFi UX; matcher is a governance-controlled protocol). " +
+      "Set this to cap exposure if the matcher were ever compromised.",
+    ),
 });
 
 export const RevokeCreditDelegationSchema = z.object({
@@ -193,12 +199,33 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
 
   private generateNonce(): string {
     // Crypto-safe nonce for replay prevention
-    if (typeof crypto !== "undefined" && crypto.randomUUID) {
-      return `${Date.now()}-${crypto.randomUUID()}`;
+    const c = (globalThis as unknown as {
+      crypto?: {
+        randomUUID?: () => string;
+        getRandomValues?: (buf: Uint8Array) => Uint8Array;
+      };
+    }).crypto;
+    if (c?.randomUUID) {
+      return `${Date.now()}-${c.randomUUID()}`;
     }
-    const bytes = new Uint8Array(16);
-    crypto.getRandomValues(bytes);
-    return `${Date.now()}-${Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("")}`;
+    if (c?.getRandomValues) {
+      const bytes = new Uint8Array(16);
+      c.getRandomValues(bytes);
+      return `${Date.now()}-${Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("")}`;
+    }
+    // Node fallback
+    const nodeCrypto = require("crypto") as typeof import("crypto");
+    return `${Date.now()}-${nodeCrypto.randomBytes(16).toString("hex")}`;
+  }
+
+  private async getChainIdString(walletProvider: EvmWalletProvider): Promise<string> {
+    try {
+      const net = (walletProvider as unknown as { getNetwork?: () => Promise<{ chainId?: number | string | bigint }> | { chainId?: number | string | bigint } }).getNetwork?.();
+      const resolved = net && typeof (net as Promise<unknown>).then === "function" ? await net : net;
+      const id = (resolved as { chainId?: number | string | bigint } | undefined)?.chainId;
+      if (id !== undefined && id !== null) return typeof id === "bigint" ? id.toString() : String(id);
+    } catch { /* fall through */ }
+    return "8453";
   }
 
   private buildSignMessage(nonce: string, facilitatorAddress: string, chainId: string): string {
@@ -225,8 +252,9 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
       const facilitatorUrl = args.facilitatorUrl.replace(/\/+$/, "");
 
       // Step 1: Pre-register with facilitator to get Privy wallet address
+      const chainIdStr = await this.getChainIdString(walletProvider);
       const nonce = this.generateNonce();
-      const signMessage = this.buildSignMessage(nonce, args.facilitatorAddress, "8453");
+      const signMessage = this.buildSignMessage(nonce, args.facilitatorAddress, chainIdStr);
       const signature = await walletProvider.signMessage(signMessage);
 
       const preRegResp = await this.facilitatorFetch("/agents/pre-register", {
@@ -240,6 +268,10 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
       }
 
       const { privyWalletAddress } = (await preRegResp.json()) as { privyWalletAddress: string };
+
+      if (!/^0x[0-9a-fA-F]{40}$/.test(privyWalletAddress)) {
+        return `Pre-registration returned invalid Privy wallet address: ${privyWalletAddress}`;
+      }
 
       // Step 2: Call setOperator on the lending contract
       const usdcDecimals = 6;
@@ -264,18 +296,20 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
         data: setOperatorData,
       });
 
-      // Step 3: Approve collateral (max uint256 — agent controls via delegation limits)
+      // Step 3: Approve collateral. Defaults to unlimited (matcher is a governance-controlled
+      // protocol; standard DeFi UX). Users can bound exposure via args.collateralApproval.
       const MAX_UINT256 = BigInt("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+      const approvalAmount = args.collateralApproval ? BigInt(args.collateralApproval) : MAX_UINT256;
       const approveTxHash = await this.ensureAllowance(
         walletProvider,
         args.collateralToken as Address,
         this.matcherAddress,
-        MAX_UINT256,
+        approvalAmount,
       );
 
       // Step 4: Complete registration with facilitator
       const regNonce = this.generateNonce();
-      const regMessage = this.buildSignMessage(regNonce, args.facilitatorAddress, "8453");
+      const regMessage = this.buildSignMessage(regNonce, args.facilitatorAddress, chainIdStr);
       const regSignature = await walletProvider.signMessage(regMessage);
 
       const regResp = await this.facilitatorFetch("/agents/register", {
