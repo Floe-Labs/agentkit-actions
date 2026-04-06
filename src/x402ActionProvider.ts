@@ -44,8 +44,11 @@ export const GrantCreditDelegationSchema = z.object({
   collateralApproval: NonNegIntString.optional()
     .describe(
       "Optional bounded collateral allowance to grant the matcher (raw token units). " +
-      "If omitted, an unlimited approval is set (matches standard DeFi UX; matcher is a governance-controlled protocol). " +
-      "Set this to cap exposure if the matcher were ever compromised.",
+      "If omitted, an unlimited approval (MAX_UINT256) is set — matches standard DeFi UX, and " +
+      "the matcher is a governance-controlled protocol that enforces exact amounts at match time. " +
+      "PRODUCTION RECOMMENDATION: pass a bounded value equal to the sum of collateral you expect " +
+      "to lock over the full delegation window (expiryDays). Even a generous cap is preferable to " +
+      "unlimited if the matcher were ever compromised via a governance takeover.",
     ),
 });
 
