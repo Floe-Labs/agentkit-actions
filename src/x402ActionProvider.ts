@@ -6,7 +6,7 @@ import {
 } from "@coinbase/agentkit";
 import { encodeFunctionData } from "viem";
 import { z } from "zod";
-import { LENDING_MATCHER_ABI, ERC20_ABI, BASIS_POINTS, BASE_MAINNET_MATCHER } from "./constants.js";
+import { LENDING_MATCHER_ABI, ERC20_ABI, BASE_MAINNET_MATCHER } from "./constants.js";
 import type { Address } from "./types.js";
 import { formatBps, formatTokenAmount, formatAddress, formatDuration } from "./utils.js";
 
@@ -16,13 +16,31 @@ const AddressSchema = z
   .string()
   .regex(/^0x[a-fA-F0-9]{40}$/, "Must be a valid Ethereum address");
 
+const NonNegIntString = z
+  .string()
+  .regex(/^(0|[1-9]\d*)$/, "Must be a non-negative integer");
+
+// Known collateral tokens on Base
+const KNOWN_COLLATERAL: Record<string, boolean> = {
+  "0x4200000000000000000000000000000000000006": true, // WETH
+  "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf": true, // cbBTC
+};
+
 export const GrantCreditDelegationSchema = z.object({
   facilitatorAddress: AddressSchema.describe("The facilitator's operator address"),
-  facilitatorUrl: z.string().url().describe("The facilitator API base URL (e.g. https://x402.floe.xyz)"),
-  borrowLimit: z.string().describe("Maximum borrow limit in USDC (e.g. '10000' for $10K)"),
-  maxRateBps: z.string().default("1500").describe("Maximum interest rate in basis points (e.g. '1500' = 15%)"),
-  expiryDays: z.string().default("90").describe("Number of days until delegation expires"),
-  collateralToken: AddressSchema.describe("Collateral token address (WETH or cbBTC)"),
+  facilitatorUrl: z.string().url()
+    .refine((u) => u.startsWith("https://"), "Must use HTTPS")
+    .describe("The facilitator API base URL (e.g. https://x402.floe.xyz)"),
+  borrowLimit: NonNegIntString.describe("Maximum borrow limit in USDC (e.g. '10000' for $10K)"),
+  maxRateBps: NonNegIntString.default("1500")
+    .refine((v) => BigInt(v) <= 10000n, "Must be <= 10000 basis points")
+    .describe("Maximum interest rate in basis points (e.g. '1500' = 15%)"),
+  expiryDays: NonNegIntString.default("90")
+    .refine((v) => { const d = BigInt(v); return d >= 1n && d <= 3650n; }, "Must be 1-3650 days")
+    .describe("Number of days until delegation expires"),
+  collateralToken: AddressSchema
+    .refine((v) => KNOWN_COLLATERAL[v.toLowerCase()] === true, "Must be WETH or cbBTC")
+    .describe("Collateral token address (WETH or cbBTC)"),
 });
 
 export const RevokeCreditDelegationSchema = z.object({
@@ -93,43 +111,60 @@ const OPERATOR_ABI = [
   },
 ] as const;
 
+const FETCH_TIMEOUT_MS = 15_000;
+
 // ── Config ──────────────────────────────────────────────────────────────────
 
 export interface X402Config {
   facilitatorUrl?: string;
   facilitatorApiKey?: string;
-  matcherAddress?: string;
+  matcherAddress?: Address;
 }
 
 // ── Provider ────────────────────────────────────────────────────────────────
 
 export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
   private matcherAddress: Address;
-  private facilitatorUrl: string;
-  private facilitatorApiKey: string;
+  private defaultFacilitatorUrl: string;
+  private defaultFacilitatorApiKey: string;
 
   constructor(config?: Partial<X402Config>) {
     super("x402", []);
     this.matcherAddress = (config?.matcherAddress ?? BASE_MAINNET_MATCHER) as Address;
-    this.facilitatorUrl = config?.facilitatorUrl ?? "";
-    this.facilitatorApiKey = config?.facilitatorApiKey ?? "";
+    // Normalize: strip trailing slash
+    this.defaultFacilitatorUrl = (config?.facilitatorUrl ?? "").replace(/\/+$/, "");
+    this.defaultFacilitatorApiKey = config?.facilitatorApiKey ?? "";
   }
 
   supportsNetwork = (network: Network): boolean => {
-    return network.chainId === "8453";
+    return network.chainId === "8453" || network.chainId === "84532";
   };
 
-  private async facilitatorFetch(path: string, options?: RequestInit): Promise<Response> {
-    if (!this.facilitatorUrl) throw new Error("facilitatorUrl not configured");
-    if (!this.facilitatorApiKey) throw new Error("facilitatorApiKey not configured");
-    return fetch(`${this.facilitatorUrl}${path}`, {
-      ...options,
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.facilitatorApiKey}`,
-        ...(options?.headers ?? {}),
-      },
-    });
+  private async facilitatorFetch(
+    path: string,
+    options?: RequestInit,
+    overrideUrl?: string,
+    overrideKey?: string,
+  ): Promise<Response> {
+    const baseUrl = overrideUrl || this.defaultFacilitatorUrl;
+    const apiKey = overrideKey || this.defaultFacilitatorApiKey;
+    if (!baseUrl) throw new Error("facilitatorUrl not configured");
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    try {
+      return await fetch(`${baseUrl}${path}`, {
+        ...options,
+        signal: controller.signal,
+        headers: {
+          "Content-Type": "application/json",
+          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+          ...(options?.headers ?? {}),
+        },
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   private async ensureAllowance(
@@ -156,6 +191,20 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     return walletProvider.sendTransaction({ to: tokenAddress, data });
   }
 
+  private generateNonce(): string {
+    // Crypto-safe nonce for replay prevention
+    if (typeof crypto !== "undefined" && crypto.randomUUID) {
+      return `${Date.now()}-${crypto.randomUUID()}`;
+    }
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    return `${Date.now()}-${Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("")}`;
+  }
+
+  private buildSignMessage(nonce: string, facilitatorAddress: string, chainId: string): string {
+    return `Register with Floe Facilitator\nFacilitator: ${facilitatorAddress}\nChain: ${chainId}\nNonce: ${nonce}`;
+  }
+
   // ── grant_credit_delegation ─────────────────────────────────────────────
 
   @CreateAction({
@@ -173,18 +222,17 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
   ): Promise<string> {
     try {
       const agentAddress = await walletProvider.getAddress();
-      const facilitatorUrl = args.facilitatorUrl;
+      const facilitatorUrl = args.facilitatorUrl.replace(/\/+$/, "");
 
       // Step 1: Pre-register with facilitator to get Privy wallet address
-      const nonce = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      const signMessage = `Register with Floe Facilitator\nNonce: ${nonce}`;
+      const nonce = this.generateNonce();
+      const signMessage = this.buildSignMessage(nonce, args.facilitatorAddress, "8453");
       const signature = await walletProvider.signMessage(signMessage);
 
-      const preRegResp = await fetch(`${facilitatorUrl}/agents/pre-register`, {
+      const preRegResp = await this.facilitatorFetch("/agents/pre-register", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ walletAddress: agentAddress, signature, nonce }),
-      });
+      }, facilitatorUrl);
 
       if (!preRegResp.ok) {
         const err = (await preRegResp.json()) as { error?: string };
@@ -216,26 +264,24 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
         data: setOperatorData,
       });
 
-      // Step 3: Approve collateral token spending
-      // Max approval — agent controls exposure via operator delegation limits
-      const approvalAmount = BigInt("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"); // type(uint256).max
+      // Step 3: Approve collateral (max uint256 — agent controls via delegation limits)
+      const MAX_UINT256 = BigInt("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
       const approveTxHash = await this.ensureAllowance(
         walletProvider,
         args.collateralToken as Address,
         this.matcherAddress,
-        approvalAmount,
+        MAX_UINT256,
       );
 
       // Step 4: Complete registration with facilitator
-      const regNonce = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      const regMessage = `Register with Floe Facilitator\nNonce: ${regNonce}`;
+      const regNonce = this.generateNonce();
+      const regMessage = this.buildSignMessage(regNonce, args.facilitatorAddress, "8453");
       const regSignature = await walletProvider.signMessage(regMessage);
 
-      const regResp = await fetch(`${facilitatorUrl}/agents/register`, {
+      const regResp = await this.facilitatorFetch("/agents/register", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ walletAddress: agentAddress, signature: regSignature, nonce: regNonce }),
-      });
+      }, facilitatorUrl);
 
       if (!regResp.ok) {
         const err = (await regResp.json()) as { error?: string };
@@ -250,11 +296,12 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
         creditLimit: string;
       };
 
-      // Store the API key for subsequent x402 calls
-      this.facilitatorApiKey = regResult.apiKey;
-      this.facilitatorUrl = facilitatorUrl;
+      // Store for subsequent calls in this session
+      this.defaultFacilitatorApiKey = regResult.apiKey;
+      this.defaultFacilitatorUrl = facilitatorUrl;
 
       const creditLimitFormatted = formatTokenAmount(BigInt(regResult.creditLimit), usdcDecimals, "USDC");
+      const keyPreview = regResult.apiKey.slice(-4);
 
       return [
         "## Credit Delegation Granted\n",
@@ -267,8 +314,8 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
         `**setOperator tx**: ${setOpTxHash}`,
         approveTxHash ? `**Approval tx**: ${approveTxHash}` : "**Approval**: Already sufficient",
         "",
-        `> **API Key**: \`${regResult.apiKey}\``,
-        "> Save this key — it won't be shown again.",
+        `> API key stored for this session (ending ...${keyPreview}).`,
+        "> Pass it via `X402Config.facilitatorApiKey` if you need it across sessions.",
       ].join("\n");
     } catch (e) {
       return `Error granting credit delegation: ${e instanceof Error ? e.message : String(e)}`;
@@ -300,19 +347,6 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
         to: this.matcherAddress,
         data,
       });
-
-      // Verify on-chain
-      const agentAddress = await walletProvider.getAddress();
-      const perm = (await walletProvider.readContract({
-        address: this.matcherAddress,
-        abi: OPERATOR_ABI,
-        functionName: "getOperatorPermission",
-        args: [agentAddress as `0x${string}`, args.facilitatorAddress as `0x${string}`],
-      })) as { approved: boolean };
-
-      if (perm.approved) {
-        return `Warning: revokeOperator tx sent (${txHash}) but delegation still shows as approved. It may not have confirmed yet.`;
-      }
 
       return [
         "## Credit Delegation Revoked\n",
@@ -362,13 +396,12 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
       const daysLeft = isExpired ? 0n : (perm.expiry - now) / 86400n;
       const available = perm.borrowLimit > perm.borrowed ? perm.borrowLimit - perm.borrowed : 0n;
       const nearExpiry = daysLeft < 7n && daysLeft > 0n;
-
       const usdcDecimals = 6;
 
       const lines = [
         "## Credit Delegation Status\n",
         `**Facilitator**: ${formatAddress(args.facilitatorAddress)}`,
-        `**Status**: ${perm.approved ? (isExpired ? "⚠️ Expired" : "✅ Active") : "❌ Not Active"}`,
+        `**Status**: ${perm.approved ? (isExpired ? "Expired" : "Active") : "Not Active"}`,
         "",
         `**Borrow Limit**: ${formatTokenAmount(perm.borrowLimit, usdcDecimals, "USDC")}`,
         `**Borrowed**: ${formatTokenAmount(perm.borrowed, usdcDecimals, "USDC")}`,
@@ -380,13 +413,8 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
       if (perm.onBehalfOfRestriction !== "0x0000000000000000000000000000000000000000") {
         lines.push(`**Funds Route To**: ${formatAddress(perm.onBehalfOfRestriction)}`);
       }
-
       if (nearExpiry) {
-        lines.push("", "⚠️ **Delegation expiring soon!** Consider renewing via `grant_credit_delegation`.");
-      }
-
-      if (isExpired && perm.approved) {
-        lines.push("", "⚠️ **Delegation is expired.** No new borrows can be made. Renew to continue.");
+        lines.push("", "**Delegation expiring soon!** Consider renewing via `grant_credit_delegation`.");
       }
 
       return lines.join("\n");
@@ -421,17 +449,14 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
 
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({ error: resp.statusText }));
-        const errorObj = err as { error?: string; retryAfterMs?: number };
-        if (errorObj.error === "funding_in_progress") {
-          return "⏳ Funding in progress — the facilitator is borrowing funds. Retry in 30 seconds.";
-        }
-        if (errorObj.error === "credit_frozen") {
-          return "❄️ Credit frozen — your collateral health ratio is too low. Add collateral or wait for price recovery.";
-        }
-        if (errorObj.error === "insufficient_balance") {
-          return "💸 Insufficient credit — your credit line is fully utilized. Wait for a top-up or reduce usage.";
-        }
-        return `Facilitator error: ${errorObj.error ?? resp.statusText}`;
+        const errorObj = err as { error?: string };
+        const errorMap: Record<string, string> = {
+          funding_in_progress: "Funding in progress — the facilitator is borrowing funds. Retry in 30 seconds.",
+          credit_frozen: "Credit frozen — your collateral health ratio is too low.",
+          insufficient_balance: "Insufficient credit — your credit line is fully utilized.",
+          account_closed: "Account closed — no further payments.",
+        };
+        return errorMap[errorObj.error ?? ""] ?? `Facilitator error: ${errorObj.error ?? resp.statusText}`;
       }
 
       const contentType = resp.headers.get("content-type") ?? "";
@@ -439,7 +464,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
         ? JSON.stringify(await resp.json(), null, 2)
         : await resp.text();
 
-      const paymentTx = resp.headers.get("x-payment-response") || resp.headers.get("payment-response");
+      const paymentTx = resp.headers.get("payment-response") || resp.headers.get("x-payment-response");
 
       const lines = ["## Response\n"];
       if (paymentTx) {
@@ -449,6 +474,9 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
 
       return lines.join("\n");
     } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") {
+        return "Facilitator request timed out. Retry later.";
+      }
       return `Error fetching URL: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
@@ -476,7 +504,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
         creditLimit: string;
         creditUsed: string;
         creditAvailable: string;
-        activeLoans: Array<{ loanId: string; borrowAmount?: string; principalRaw?: string; status: string }>;
+        activeLoans: Array<{ loanId: string; principalRaw?: string }>;
         delegationActive: boolean;
         privyWalletBalance: string;
         privyWalletAddress: string;
@@ -489,11 +517,10 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
         `**Credit Used**: ${formatTokenAmount(BigInt(data.creditUsed || "0"), usdcDecimals, "USDC")}`,
         `**Credit Available**: ${formatTokenAmount(BigInt(data.creditAvailable || "0"), usdcDecimals, "USDC")}`,
         `**Active Loans**: ${data.activeLoans?.length ?? 0}`,
-        `**Delegation Active**: ${data.delegationActive ? "✅ Yes" : "❌ No"}`,
-        `**Privy Wallet**: ${formatAddress(data.privyWalletAddress)}`,
-        `**Wallet Balance**: ${formatTokenAmount(BigInt(data.privyWalletBalance || "0"), usdcDecimals, "USDC")}`,
+        `**Delegation Active**: ${data.delegationActive ? "Yes" : "No"}`,
       ].join("\n");
     } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") return "Request timed out.";
       return `Error fetching balance: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
@@ -519,7 +546,6 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
 
       const data = (await resp.json()) as {
         transactions: Array<{
-          id: number;
           targetUrl: string;
           method: string;
           paymentAmountRaw: string | null;
@@ -530,9 +556,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
         hasMore: boolean;
       };
 
-      if (!data.transactions?.length) {
-        return "No transactions found.";
-      }
+      if (!data.transactions?.length) return "No transactions found.";
 
       const usdcDecimals = 6;
       const lines = ["## Recent Transactions\n"];
@@ -540,20 +564,14 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
         const amount = tx.paymentAmountRaw
           ? formatTokenAmount(BigInt(tx.paymentAmountRaw), usdcDecimals, "USDC")
           : "—";
-        const status = tx.status === "success" ? "✅" : tx.status === "passthrough" ? "🔄" : "❌";
-        lines.push(
-          `${status} **${tx.method}** ${tx.targetUrl}`,
-          `   Amount: ${amount} | ${tx.createdAt}`,
-          tx.x402TxHash ? `   Tx: ${tx.x402TxHash}` : "",
-        );
+        const statusIcon = tx.status === "success" ? "OK" : tx.status === "passthrough" ? "FREE" : "FAIL";
+        lines.push(`**${statusIcon}** ${tx.method} ${tx.targetUrl} — ${amount}`);
       }
 
-      if (data.hasMore) {
-        lines.push("\n*More transactions available — increase limit to see more.*");
-      }
-
+      if (data.hasMore) lines.push("\n*More transactions available — increase limit.*");
       return lines.join("\n");
     } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") return "Request timed out.";
       return `Error fetching transactions: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
