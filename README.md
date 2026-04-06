@@ -55,7 +55,7 @@ npm install floe-agent @coinbase/agentkit viem zod
 
 ```typescript
 import { AgentKit } from "@coinbase/agentkit";
-import { floeActionProvider } from "@floe/agentkit-actions";
+import { floeActionProvider } from "floe-agent";
 
 const agentkit = await AgentKit.from({
   walletProvider: myWalletProvider,
@@ -70,7 +70,7 @@ const agentkit = await AgentKit.from({
 });
 ```
 
-## Actions (23 total)
+## Actions (29 total: 23 lending + 6 x402)
 
 ### Read Actions (8)
 
@@ -156,7 +156,7 @@ import { AgentKit } from "@coinbase/agentkit";
 import { getVercelAITools } from "@coinbase/agentkit-vercel-ai-sdk";
 import { generateText } from "ai";
 import { openai } from "@ai-sdk/openai";
-import { floeActionProvider } from "@floe/agentkit-actions";
+import { floeActionProvider } from "floe-agent";
 
 const agentkit = await AgentKit.from({
   walletProvider,
@@ -195,7 +195,7 @@ import { AgentKit } from "@coinbase/agentkit";
 import { getMcpTools } from "@coinbase/agentkit-model-context-protocol";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { floeActionProvider } from "@floe/agentkit-actions";
+import { floeActionProvider } from "floe-agent";
 
 const agentkit = await AgentKit.from({
   walletProvider,
@@ -368,7 +368,7 @@ npx tsx chatbot.ts
 ```typescript
 import { AgentKit, CdpWalletProvider } from "@coinbase/agentkit";
 import { tool } from "ai";
-import { floeActionProvider } from "@floe/agentkit-actions";
+import { floeActionProvider } from "floe-agent";
 
 const walletProvider = await CdpWalletProvider.configureWithWallet({
   apiKeyName: process.env.CDP_API_KEY_NAME,
@@ -399,7 +399,7 @@ npx tsx standalone.ts
 ```
 
 ```typescript
-import { FloeActionProvider } from "@floe/agentkit-actions";
+import { FloeActionProvider } from "floe-agent";
 
 const floe = new FloeActionProvider(); // defaults to Base Mainnet
 
@@ -478,9 +478,10 @@ npm run build
 
 ```
 src/
-  index.ts                 # Package entry point, exports floeActionProvider()
-  floeActionProvider.ts    # All 30+ actions (ActionProvider class)
-  schemas.ts               # Zod schemas for every action's input
+  index.ts                 # Package entry point, exports both providers
+  floeActionProvider.ts    # 23 lending actions (FloeActionProvider)
+  x402ActionProvider.ts    # 6 x402 credit actions (X402ActionProvider)
+  schemas.ts               # Zod schemas for lending action inputs
   constants.ts             # Contract addresses, ABIs, known tokens
   flashArbBytecode.ts      # Compiled FlashArbReceiver bytecode + constructor ABI
   types.ts                 # TypeScript interfaces (Market, Loan, Intent, etc.)
