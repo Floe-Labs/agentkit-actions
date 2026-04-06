@@ -537,7 +537,8 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     args: z.infer<typeof X402GetTransactionsSchema>,
   ): Promise<string> {
     try {
-      const limit = parseInt(args.limit, 10) || 20;
+      const parsed = parseInt(args.limit, 10);
+      const limit = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 100) : 20;
       const resp = await this.facilitatorFetch(`/agents/transactions?limit=${limit}`);
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({ error: resp.statusText }));
