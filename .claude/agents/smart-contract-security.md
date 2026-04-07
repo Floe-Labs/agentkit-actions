@@ -25,7 +25,7 @@ You MAY create files in:
 1. Map contract architecture (inheritance, interfaces, libraries)
 2. Identify privileged roles and their capabilities
 3. Trace token/ETH flow paths
-4. Catalog all external calls and cross-contract ractions
+4. Catalog all external calls and cross-contract interactions
 5. Review deployment configuration and constructor/initializer params
 
 ### Phase 2: Automated Analysis
@@ -56,7 +56,7 @@ forge build 2>&1 || npx hardhat compile 2>&1
 **HIGH (should fix)**
 - Front-running / sandwich attack exposure
 - Denial of service vectors (unbounded loops, block gas limit)
-- Precision loss in divion operations
+- Precision loss in division operations
 - Unsafe external calls (unchecked return values)
 - Signature replay attacks
 - Timestamp/block number dependence for critical logic

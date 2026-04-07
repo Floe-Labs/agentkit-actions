@@ -31,19 +31,33 @@ You are a senior frontend engineer + technical writer for the Floe ecosystem.
 
 #### Architectural boundaries (apps/web — ESLint-enforced)
 
-```
-app/ → containers/ → services/ → repositories/ → infrastructure/ → lib/
-```
+These rules are enforced by `eslint-plugin-boundaries` in
+`apps/web/eslint.config.mjs`. Check that file for the source of truth.
 
-- `app/` (pages) can import anything
-- `components/` can import: components, hooks, lib
-- `containers/` can import: components, state, hooks, lib
-- `services/` can import: services, repositories, lib
-- `repositories/` can import: infrastructure, lib
-- `infrastructure/` can import: lib only
-- `lib/` can import: lib only
+Permitted imports (FROM → TO):
 
-NEVER violate this layering. If you need a backend service in a container, route it through `services/` → `repositories/` → `infrastructure/`.
+- `app/` (pages) → anything
+- `containers/` → `components, state, hooks, services, repositories, lib`
+- `components/` → `components, hooks, lib`
+- `state/` → `services, repositories, lib`
+- `hooks/` → `state, services, repositories, lib`
+- `services/` → `services, repositories, lib`
+- `repositories/` → `infrastructure, lib`
+- `infrastructure/` → `lib`
+- `lib/` → `lib`
+
+Key reminders:
+- Containers **may** import `state` and `hooks` directly (the diagram's
+  linear arrow is a simplification — containers are the integration layer).
+- `hooks/` **may** import `services` and `repositories` — this is how
+  React Query hooks reach data access.
+- Nothing below `services/` should ever import from `containers/` or
+  `components/`. No cycles.
+- If you need a backend service inside a container, route it through
+  `services/ → repositories/ → infrastructure/`, or use a hook that does.
+
+NEVER violate this layering — if you think you need to, you are probably
+missing an abstraction in `services/` or `hooks/`.
 
 ### floe-labs-docs — markdown documentation
 

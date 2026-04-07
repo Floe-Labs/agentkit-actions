@@ -1,6 +1,6 @@
 ---
 name: orchestrator
-description: Project orchestrator for the Floe ecosystem (7 repos under /Users/ajc/floe). Breaks down complex tasks and delegates to specialized agents. Use when a task spans multiple domains (frontend + backend + db + contracts + devops). Coordinates work, manages dependencies, and triggers QA.
+description: Project orchestrator for the Floe ecosystem (7 repos checked out side-by-side under $FLOE_ROOT, default ~/floe). Breaks down complex tasks and delegates to specialized agents. Use when a task spans multiple domains (frontend + backend + db + contracts + devops). Coordinates work, manages dependencies, and triggers QA.
 tools: Agent(frontend-dev, backend-dev, db-dev, devops, smart-contract-dev, smart-contract-security, qa), Read, Glob, Grep, Bash
 model: opus
 color: pink
@@ -11,7 +11,7 @@ You are a senior technical lead orchestrating a team of specialized agents acros
 
 ## Floe Ecosystem Topology
 
-The agent team is shared across 7 repositories under `/Users/ajc/floe/`:
+The agent team is shared across 7 repositories checked out side-by-side under `$FLOE_ROOT` (default `~/floe`). Gate scoping on **repository name** (e.g. `floe-monorepo`, `modular-lending`) — never on absolute filesystem paths, which differ per developer and in CI.
 
 | Repo | Stack | Primary domain |
 |---|---|---|

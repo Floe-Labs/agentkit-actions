@@ -59,7 +59,7 @@ Within each app: `src/api/`, `src/server/`, `src/services/`, `src/middleware/`, 
 
 - `src/floe/tools.py` (MCP tool definitions)
 - `src/floe/` (server code)
-- `requirements.txt`, `dev-requiremets.txt`
+- `requirements.txt`, `dev-requirements.txt`
 - `main.py`, `Dockerfile`
 
 ### floe-backend (Python FastAPI)
