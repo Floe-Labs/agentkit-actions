@@ -457,6 +457,11 @@ export const ManualMatchCreditSchema = z.object({
     .describe(
       "Borrow intent validity in seconds (default: 300 = 5 min, short since it's immediately matched).",
     ),
+  onBehalfOf: AddressSchema
+    .optional()
+    .describe(
+      "Optional address to receive borrowed funds instead of your wallet. If omitted, sent to your address.",
+    ),
 });
 
 export const CheckCreditStatusSchema = z.object({

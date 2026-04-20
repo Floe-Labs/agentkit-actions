@@ -64,8 +64,6 @@ import {
   RenewCreditLineV2Schema,
 } from "./schemas.js";
 import type { FloeConfig, Address } from "./types.js";
-import { createCreditClient } from "./creditClientAdapter.js";
-import type { CreditClient as CreditClientType } from "@floe/credit-sdk";
 import { encodeAbiParameters, parseAbiParameters } from "viem";
 import {
   formatBps,
@@ -86,8 +84,6 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private publicClient: any | null = null;
   private rpcUrl?: string;
-  private envioEndpoint?: string;
-  private envioApiToken?: string;
 
   constructor(config?: Partial<FloeConfig>) {
     super("floe", []);
@@ -95,23 +91,12 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
     this.viewsAddress = config?.lendingViewsAddress ?? BASE_MAINNET_VIEWS;
     this.knownMarketIds = config?.knownMarketIds ?? [];
     this.rpcUrl = config?.rpcUrl;
-    this.envioEndpoint = config?.envioEndpoint;
-    this.envioApiToken = config?.envioApiToken;
     if (config?.rpcUrl) {
       this.publicClient = createPublicClient({
         chain: base,
         transport: http(config.rpcUrl),
       });
     }
-  }
-
-  private getCreditClient(walletProvider: EvmWalletProvider): CreditClientType {
-    return createCreditClient(walletProvider, {
-      rpcUrl: this.rpcUrl,
-      envioEndpoint: this.envioEndpoint,
-      envioApiToken: this.envioApiToken,
-      contractAddress: this.matcherAddress as `0x${string}`,
-    });
   }
 
   supportsNetwork = (network: Network): boolean => {
@@ -204,7 +189,8 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
       ({ intent }) =>
         intent.lender !== ZERO_ADDRESS &&
         intent.filledAmount < intent.amount &&
-        intent.expiry > now,
+        intent.expiry > now &&
+        BigInt(intent.validFromTimestamp ?? 0n) <= now,
     );
   }
 
@@ -221,6 +207,71 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
     } catch {
       // Fall through
     }
+    return null;
+  }
+
+  /**
+   * Preflight a borrow request against a lend intent.
+   * Returns null if compatible, or a human-readable error string explaining why not.
+   * Used by both manualMatchCredit (single-intent path) and instantBorrow (auto-select path).
+   */
+  private checkLendIntentCompatibility(
+    lendIntent: any,
+    params: {
+      marketId: `0x${string}`;
+      borrowAmount: bigint;
+      maxInterestRateBps: bigint;
+      minLtvBps: bigint;
+      duration: bigint;
+    },
+  ): string | null {
+    const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+
+    if ((lendIntent.lender as string).toLowerCase() === ZERO_ADDRESS) {
+      return "Lend intent not found on-chain. It may have been revoked or already fully matched.";
+    }
+
+    // Market must match
+    const intentMarket = (lendIntent.marketId as string).toLowerCase();
+    if (intentMarket !== params.marketId.toLowerCase()) {
+      return `Lend intent belongs to market ${intentMarket}, but borrow requested market ${params.marketId}.`;
+    }
+
+    const now = BigInt(Math.floor(Date.now() / 1000));
+    if (BigInt(lendIntent.validFromTimestamp ?? 0n) > now) {
+      return "Lend intent is not yet valid (validFromTimestamp in the future).";
+    }
+    if (BigInt(lendIntent.expiry) <= now) {
+      return "Lend intent has expired.";
+    }
+
+    const remaining = (lendIntent.amount as bigint) - (lendIntent.filledAmount as bigint);
+    if (remaining < params.borrowAmount) {
+      return `Lend intent only has ${remaining} remaining (raw units), but you requested ${params.borrowAmount}.`;
+    }
+
+    // Exact-fill constraint: borrow struct always posts minFillAmount == borrowAmount
+    // with allowPartialFill=false, so a lend intent that disallows partial fills
+    // can only accept a borrow EQUAL to its remaining amount.
+    const allowPartialFill = Boolean(lendIntent.allowPartialFill);
+    if (!allowPartialFill && params.borrowAmount !== remaining) {
+      return `Lend intent does not allow partial fills; requested ${params.borrowAmount} but remaining is ${remaining} (must match exactly).`;
+    }
+    const minFillAmount = BigInt(lendIntent.minFillAmount ?? 0n);
+    if (params.borrowAmount < minFillAmount) {
+      return `Requested borrow amount (${params.borrowAmount}) is below the lend intent's minimum fill (${minFillAmount}).`;
+    }
+
+    if ((lendIntent.minInterestRateBps as bigint) > params.maxInterestRateBps) {
+      return `Requested maxInterestRateBps (${params.maxInterestRateBps}) is below the lend intent's minimum rate (${lendIntent.minInterestRateBps}).`;
+    }
+    if ((lendIntent.maxLtvBps as bigint) < params.minLtvBps) {
+      return `Requested minLtvBps (${params.minLtvBps}) exceeds the lend intent's max LTV (${lendIntent.maxLtvBps}).`;
+    }
+    if (params.duration < (lendIntent.minDuration as bigint) || params.duration > (lendIntent.maxDuration as bigint)) {
+      return `Requested duration (${params.duration}s) is outside the lend intent's allowed range [${lendIntent.minDuration}, ${lendIntent.maxDuration}]s.`;
+    }
+
     return null;
   }
 
@@ -2043,7 +2094,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
       // Build borrow intent struct
       const borrowStruct = {
         borrower: userAddress,
-        onBehalfOf: userAddress,
+        onBehalfOf: (args.onBehalfOf ?? userAddress) as Address,
         borrowAmount: BigInt(args.borrowAmount),
         collateralAmount: parsedCollateral,
         minFillAmount: BigInt(args.borrowAmount),
@@ -2527,13 +2578,13 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
   }
 
   // ════════════════════════════════════════════════════════════════════════
-  //  SDK-BACKED CREDIT ACTIONS (v2)
+  //  AUTO-SELECT CREDIT ACTIONS
   // ════════════════════════════════════════════════════════════════════════
 
   @CreateAction({
     name: "instant_borrow",
     description:
-      "Instantly borrow funds by auto-selecting the best available lend intent. Single action: queries the intent book, picks the lowest-rate compatible offer, and executes the 2-tx borrow flow (register + match). For DeFi agents that need capital in seconds, not minutes of browsing.",
+      "Instantly borrow funds by auto-selecting the best available lend intent. Single action: queries the on-chain intent book, picks the lowest-rate compatible offer, and executes the 2-tx borrow flow (register + match). For DeFi agents that need capital in seconds, not minutes of browsing. Requires rpcUrl in FloeConfig.",
     schema: InstantBorrowSchema,
   })
   async instantBorrow(
@@ -2541,46 +2592,62 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
     args: z.infer<typeof InstantBorrowSchema>,
   ): Promise<string> {
     try {
-      const client = this.getCreditClient(walletProvider);
-      const result = await client.instantBorrow({
-        marketId: args.marketId as `0x${string}`,
-        borrowAmount: BigInt(args.borrowAmount),
-        collateralAmount: BigInt(args.collateralAmount),
-        maxInterestRateBps: BigInt(args.maxInterestRateBps),
-        duration: BigInt(args.duration),
-        minLtvBps: BigInt(args.minLtvBps),
-        onBehalfOf: args.onBehalfOf as `0x${string}` | undefined,
-      });
+      const marketId = args.marketId as `0x${string}`;
+      const borrowAmount = BigInt(args.borrowAmount);
+      const maxInterestRateBps = BigInt(args.maxInterestRateBps);
+      const minLtvBps = BigInt(args.minLtvBps);
+      const duration = BigInt(args.duration);
 
-      return [
-        `## Instant Borrow — Success\n`,
-        `- **Loan ID**: ${result.loanId}`,
-        `- **Borrowed**: ${args.borrowAmount} (raw units)`,
-        `- **Collateral Locked**: ${args.collateralAmount} (raw units)`,
-        `- **Interest Rate**: ${formatBps(result.interestRateBps)} (lender's rate)`,
-        `- **Duration**: ${formatDuration(result.duration)}`,
-        result.approvalTxHash ? `- **Approval TX**: ${result.approvalTxHash}` : `- **Approval**: Allowance sufficient`,
-        `- **Register Borrow TX**: ${result.registerBorrowTxHash}`,
-        `- **Match TX**: ${result.matchTxHash}`,
-        `- **Lend Intent Matched**: ${result.lendIntentHash}`,
-        args.onBehalfOf ? `- **USDC Sent To**: ${formatAddress(args.onBehalfOf)}` : "",
-        `\nUse **check_credit_status** with loan ID ${result.loanId} to monitor your credit facility.`,
-      ].join("\n");
-    } catch (e: any) {
-      if (e.name === "NoLiquidityError") {
-        const closestInfo = e.closestOffers?.length
-          ? `\nClosest offers:\n${e.closestOffers.map((o: any) => `  - Rate: ${formatBps(o.rate)}, Available: ${o.available}`).join("\n")}`
-          : "";
-        return `No matching liquidity found for your borrow request.${closestInfo}\n\nTry adjusting your maxInterestRateBps or borrowAmount.`;
+      const available = await this.scanAvailableLendIntents(walletProvider, marketId);
+
+      // Filter with compatibility checks (same rules as manualMatchCredit preflight)
+      const compatible = available.filter(
+        ({ intent }) =>
+          this.checkLendIntentCompatibility(intent, {
+            marketId,
+            borrowAmount,
+            maxInterestRateBps,
+            minLtvBps,
+            duration,
+          }) === null,
+      );
+
+      if (compatible.length === 0) {
+        return (
+          "No matching liquidity found for your borrow request. " +
+          "Try adjusting your maxInterestRateBps, duration, or borrowAmount."
+        );
       }
-      return `Error in instant borrow: ${e.message ?? String(e)}`;
+
+      // Pick lowest rate
+      compatible.sort(
+        (a, b) =>
+          Number((a.intent.minInterestRateBps as bigint) - (b.intent.minInterestRateBps as bigint)),
+      );
+      const best = compatible[0];
+
+      // Delegate to manualMatchCredit for the 2-TX execution
+      return await this.manualMatchCredit(walletProvider, {
+        lendIntentHash: best.hash,
+        borrowAmount: args.borrowAmount,
+        collateralAmount: args.collateralAmount,
+        maxInterestRateBps: args.maxInterestRateBps,
+        minLtvBps: args.minLtvBps,
+        duration: args.duration,
+        marketId: args.marketId,
+        matcherCommissionBps: "50",
+        expirySeconds: "300",
+        onBehalfOf: args.onBehalfOf,
+      });
+    } catch (e) {
+      return `Error in instant borrow: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 
   @CreateAction({
     name: "repay_and_reborrow",
     description:
-      "Repay an existing credit facility and instantly borrow again in one action. Auto-selects the best available lend intent for the new loan. If the reborrow fails (no liquidity), the repayment still succeeds. Use this for agents cycling credit continuously.",
+      "Repay an existing credit facility and instantly borrow again in one action. Auto-selects the best available lend intent for the new loan. If the reborrow fails (no liquidity), the repayment still succeeds. Use this for agents cycling credit continuously. Requires rpcUrl in FloeConfig.",
     schema: RenewCreditLineV2Schema,
   })
   async repayAndReborrow(
@@ -2588,46 +2655,72 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
     args: z.infer<typeof RenewCreditLineV2Schema>,
   ): Promise<string> {
     try {
-      const client = this.getCreditClient(walletProvider);
-      const result = await client.renewCreditLine({
-        existingLoanId: BigInt(args.loanId),
-        borrowAmount: args.newBorrowAmount ? BigInt(args.newBorrowAmount) : undefined,
-        collateralAmount: args.newCollateralAmount ? BigInt(args.newCollateralAmount) : undefined,
-        maxInterestRateBps: args.maxInterestRateBps ? BigInt(args.maxInterestRateBps) : undefined,
-        duration: args.duration ? BigInt(args.duration) : undefined,
-        repaySlippageBps: BigInt(args.slippageBps),
-        onBehalfOf: args.onBehalfOf as `0x${string}` | undefined,
-      });
-
-      const lines = [
-        `## Credit Line Renewed\n`,
-        `### Old Loan Repaid`,
-        `- **Loan ID**: ${args.loanId}`,
-        `- **Repay TX**: ${result.repay.repayTxHash}`,
-        result.repay.approvalTxHash ? `- **Repay Approval TX**: ${result.repay.approvalTxHash}` : `- **Repay Approval**: Allowance sufficient`,
-      ];
-
-      if (result.newLoan) {
-        lines.push(
-          ``,
-          `### New Credit Facility Opened`,
-          `- **New Loan ID**: ${result.newLoan.loanId}`,
-          `- **Register TX**: ${result.newLoan.registerBorrowTxHash}`,
-          `- **Match TX**: ${result.newLoan.matchTxHash}`,
-          `- **Interest Rate**: ${formatBps(result.newLoan.interestRateBps)}`,
-          `- **Duration**: ${formatDuration(result.newLoan.duration)}`,
-          `\nUse **check_credit_status** with loan ID ${result.newLoan.loanId} to monitor.`,
-        );
-      } else {
-        lines.push(
-          ``,
-          `### New Credit — FAILED`,
-          `${result.reborrowError ?? "No liquidity available for reborrow."}`,
-          `\nOld loan repaid successfully. Use **instant_borrow** to try again later.`,
+      // Preflight: instantBorrow needs RPC for event scanning.
+      // Fail BEFORE repaying to avoid partial success (loan repaid but can't reborrow).
+      if (!this.publicClient) {
+        return (
+          "Cannot repay_and_reborrow: rpcUrl is not configured in FloeConfig. " +
+          "RPC access is required to scan for available lend intents during the reborrow step. " +
+          "Use repay_credit + instant_borrow separately if you want manual control."
         );
       }
 
-      return lines.join("\n");
+      // Read old loan data BEFORE repaying (needed for defaults on the new loan)
+      const oldLoan = (await walletProvider.readContract({
+        address: this.matcherAddress,
+        abi: LENDING_MATCHER_ABI,
+        functionName: "getLoan",
+        args: [BigInt(args.loanId)],
+      })) as any;
+
+      if (oldLoan.repaid) {
+        return `Loan #${args.loanId} is already repaid. Use instant_borrow to open a new credit facility.`;
+      }
+
+      // Step 1: Repay existing loan
+      const repayResult = await this.repayCredit(walletProvider, {
+        loanId: args.loanId,
+        slippageBps: args.slippageBps,
+      });
+
+      // Gate on success — repayCredit returns formatted markdown starting with this header
+      if (!repayResult.startsWith("## Credit Facility Repaid")) {
+        return repayResult; // Pass through the error
+      }
+
+      // Step 2: Instant borrow with old loan defaults
+      const borrowResult = await this.instantBorrow(walletProvider, {
+        marketId: oldLoan.marketId as string,
+        borrowAmount: args.newBorrowAmount ?? String(oldLoan.principal),
+        collateralAmount: args.newCollateralAmount ?? String(oldLoan.collateralAmount),
+        maxInterestRateBps: args.maxInterestRateBps ?? String(oldLoan.interestRateBps),
+        duration: args.duration ?? String(oldLoan.duration),
+        minLtvBps: String(oldLoan.liquidationLtvBps),
+        onBehalfOf: args.onBehalfOf,
+      });
+
+      // Gate on success — manualMatchCredit returns "## Credit Facility Opened" on success
+      if (borrowResult.startsWith("## Credit Facility Opened")) {
+        return [
+          `## Credit Line Renewed\n`,
+          `### Old Loan Repaid`,
+          repayResult.replace("## Credit Facility Repaid\n", ""),
+          ``,
+          `### New Credit Facility`,
+          borrowResult.replace("## Credit Facility Opened\n", ""),
+        ].join("\n");
+      }
+
+      // Partial success: repay OK, reborrow failed
+      return [
+        `## Credit Line — Partial Renewal\n`,
+        `### Old Loan Repaid`,
+        repayResult.replace("## Credit Facility Repaid\n", ""),
+        ``,
+        `### New Credit — FAILED`,
+        borrowResult,
+        `\nOld loan repaid successfully. Use **instant_borrow** to try again later.`,
+      ].join("\n");
     } catch (e) {
       return `Error renewing credit line: ${e instanceof Error ? e.message : String(e)}`;
     }
