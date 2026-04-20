@@ -265,8 +265,10 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
     if ((lendIntent.minInterestRateBps as bigint) > params.maxInterestRateBps) {
       return `Requested maxInterestRateBps (${params.maxInterestRateBps}) is below the lend intent's minimum rate (${lendIntent.minInterestRateBps}).`;
     }
-    if ((lendIntent.maxLtvBps as bigint) < params.minLtvBps) {
-      return `Requested minLtvBps (${params.minLtvBps}) exceeds the lend intent's max LTV (${lendIntent.maxLtvBps}).`;
+    // Protocol requires 800bps gap between borrower minLtvBps and lender maxLtvBps
+    const requiredMaxLtvBps = params.minLtvBps + 800n;
+    if ((lendIntent.maxLtvBps as bigint) < requiredMaxLtvBps) {
+      return `Requested minLtvBps (${params.minLtvBps}) requires lender maxLtvBps >= ${requiredMaxLtvBps} (800bps buffer), but the lend intent only allows ${lendIntent.maxLtvBps}.`;
     }
     if (params.duration < (lendIntent.minDuration as bigint) || params.duration > (lendIntent.maxDuration as bigint)) {
       return `Requested duration (${params.duration}s) is outside the lend intent's allowed range [${lendIntent.minDuration}, ${lendIntent.maxDuration}]s.`;
@@ -2071,14 +2073,17 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
         }) as Promise<any>,
       ]);
 
-      if (lendIntent.lender === "0x0000000000000000000000000000000000000000") {
-        return `Lend intent ${lendHash} not found on-chain. It may have been revoked or already fully matched.`;
-      }
-
-      const remaining = (lendIntent.amount as bigint) - (lendIntent.filledAmount as bigint);
-      if (remaining < BigInt(args.borrowAmount)) {
-        const loanMeta = await resolveTokenMeta(market.loanToken, walletProvider);
-        return `Lend intent only has ${formatTokenAmount(remaining, loanMeta.decimals, loanMeta.symbol)} remaining, but you requested ${formatTokenAmount(BigInt(args.borrowAmount), loanMeta.decimals, loanMeta.symbol)}.`;
+      // Full compatibility preflight — catch all mismatches before TX1
+      // to avoid leaving a stray borrow intent on-chain when TX2 reverts.
+      const incompatibility = this.checkLendIntentCompatibility(lendIntent, {
+        marketId,
+        borrowAmount: BigInt(args.borrowAmount),
+        maxInterestRateBps: BigInt(args.maxInterestRateBps),
+        minLtvBps: BigInt(args.minLtvBps),
+        duration: BigInt(args.duration),
+      });
+      if (incompatibility) {
+        return incompatibility;
       }
 
       // Auto-approve collateral
@@ -2695,7 +2700,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
         collateralAmount: args.newCollateralAmount ?? String(oldLoan.collateralAmount),
         maxInterestRateBps: args.maxInterestRateBps ?? String(oldLoan.interestRateBps),
         duration: args.duration ?? String(oldLoan.duration),
-        minLtvBps: String(oldLoan.liquidationLtvBps),
+        minLtvBps: String(oldLoan.ltvBps),
         onBehalfOf: args.onBehalfOf,
       });
 
