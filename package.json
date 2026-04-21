@@ -3,6 +3,14 @@
   "version": "0.2.0",
   "description": "Coinbase AgentKit ActionProvider for Floe DeFi lending protocol",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Floe-Labs/agentkit-actions"
+  },
+  "homepage": "https://floelabs.xyz",
+  "bugs": {
+    "url": "https://github.com/Floe-Labs/agentkit-actions/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=18"
