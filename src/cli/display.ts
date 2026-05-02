@@ -38,11 +38,13 @@ export function printHelp(): void {
     ${chalk.cyan("clear")}    Clear conversation history
     ${chalk.cyan("config")}   Show current configuration
     ${chalk.cyan("save")}     Save current config for next time
+    ${chalk.cyan("history")}  Show session transaction log
 
   ${chalk.bold("Tips:")}
     - Ask about markets, loans, prices, or intents
     - The AI will confirm before executing write operations
     - Transaction hashes link to BaseScan
+    - Use 'history' to see all on-chain actions in this session
 `);
 }
 

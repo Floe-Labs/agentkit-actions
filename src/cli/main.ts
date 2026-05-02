@@ -13,9 +13,17 @@ import { createWallet } from "./walletFactory.js";
 import { createAIModel } from "./aiFactory.js";
 import { runSetupFlow, promptReuseSavedConfig } from "./prompts.js";
 import { loadConfig, saveConfig, type FloeAgentConfig } from "./config.js";
-import { printBanner, printSessionInfo, printHelp } from "./display.js";
+import { printBanner, printSessionInfo, printHelp, formatTxLink } from "./display.js";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
+
+interface SessionLogEntry {
+  timestamp: Date;
+  toolName: string;
+  args: any;
+  result: string;
+  txHash?: string;
+}
 
 export async function main(args: string[]): Promise<void> {
   // CLI flags
@@ -125,6 +133,8 @@ export async function main(args: string[]): Promise<void> {
   });
 
   const messages: { role: "user" | "assistant"; content: string }[] = [];
+  const sessionLog: SessionLogEntry[] = [];
+  let pendingToolCall: { timestamp: Date; toolName: string; args: any } | null = null;
 
   const question = (prompt: string): Promise<string> =>
     new Promise((resolve) => rl.question(prompt, resolve));
@@ -195,6 +205,23 @@ export async function main(args: string[]): Promise<void> {
       console.log(chalk.green("  Config saved to .floe-agent.json\n"));
       continue;
     }
+    if (cmd === "history") {
+      if (sessionLog.length === 0) {
+        console.log(chalk.dim("\n  No transactions or tool calls logged in this session.\n"));
+      } else {
+        console.log(`\n  ${chalk.bold("Session History:")}\n`);
+        sessionLog.forEach((entry, i) => {
+          const time = entry.timestamp.toLocaleTimeString();
+          console.log(`  ${chalk.dim(`[${time}]`)} ${chalk.cyan(entry.toolName)}`);
+          if (entry.txHash) {
+            console.log(`    ${chalk.yellow("Transaction:")} ${formatTxLink(entry.txHash)}`);
+          }
+          const preview = entry.result.replace(/\n/g, " ").slice(0, 100);
+          console.log(`    ${chalk.dim("Result:")} ${preview}${entry.result.length > 100 ? "..." : ""}\n`);
+        });
+      }
+      continue;
+    }
 
     // Send to AI
     messages.push({ role: "user", content: trimmed });
@@ -222,10 +249,26 @@ export async function main(args: string[]): Promise<void> {
         } else if (part.type === "tool-call") {
           if (hasStartedText) process.stdout.write("\n");
           process.stdout.write(chalk.dim(`  [Calling ${part.toolName}...]\n`));
+          pendingToolCall = {
+            timestamp: new Date(),
+            toolName: part.toolName,
+            args: part.args,
+          };
         } else if (part.type === "tool-result") {
           const resultStr = typeof part.output === "string"
             ? part.output
             : JSON.stringify(part.output);
+          
+          if (pendingToolCall && pendingToolCall.toolName === part.toolName) {
+            const txHashMatch = resultStr.match(/0x[a-fA-F0-9]{64}/);
+            sessionLog.push({
+              ...pendingToolCall,
+              result: resultStr,
+              txHash: txHashMatch ? txHashMatch[0] : undefined,
+            });
+            pendingToolCall = null;
+          }
+
           const preview = resultStr.slice(0, 150);
           process.stdout.write(
             chalk.dim(`  [${part.toolName} done] ${preview}${resultStr.length > 150 ? "..." : ""}\n`)
