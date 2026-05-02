@@ -8,17 +8,6 @@ If you discover a security vulnerability in any Floe Labs repository, **do not o
 2. **Include:** description of the vulnerability, steps to reproduce, and potential impact
 3. **Response time:** We will acknowledge receipt within 48 hours and provide a detailed response within 7 business days
 
-## Bug Bounty
-
-| Severity | Reward |
-|----------|--------|
-| Critical | Up to $50,000 |
-| High | Up to $20,000 |
-| Medium | Up to $5,000 |
-| Low | Up to $1,000 |
-
-Scope includes all Floe smart contracts, the credit API, and the x402 facilitator. Client-side-only issues (e.g., UI bugs with no security impact) are out of scope.
-
 ## Audit
 
 Floe's smart contracts have been audited by **Omniscia**:
