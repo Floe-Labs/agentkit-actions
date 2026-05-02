@@ -1,8 +1,12 @@
-# @floe/agentkit-actions
+# floe-agent
+
+[![npm version](https://img.shields.io/npm/v/floe-agent)](https://www.npmjs.com/package/floe-agent)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Base Mainnet](https://img.shields.io/badge/Base-Mainnet-0052FF)](https://basescan.org/address/0x17946cD3e180f82e632805e5549EC913330Bb175)
 
 Coinbase AgentKit ActionProvider for the [Floe](https://floelabs.xyz) DeFi lending protocol on Base.
 
-Provides **30+ actions** for AI agents: DeFi lending, instant credit facilities, flash loan arbitrage, and x402 API payments. Works with any framework: Vercel AI SDK, LangChain, OpenAI Agents SDK, or as an MCP server for Claude Desktop / Cursor.
+Provides **36 actions** for AI agents: DeFi lending, instant credit facilities, flash loan arbitrage, and x402 credit delegation. Works with any framework: Vercel AI SDK, LangChain, OpenAI Agents SDK, or as an MCP server for Claude Desktop / Cursor.
 
 Also ships a **standalone CLI** (`floe-agent`) for interactive testing without any framework integration.
 
@@ -10,6 +14,21 @@ Also ships a **standalone CLI** (`floe-agent`) for interactive testing without a
 
 ```bash
 npm install floe-agent @coinbase/agentkit viem zod
+```
+
+### 5-Second Example
+
+```typescript
+import { floeActionProvider } from "floe-agent";
+
+// Borrow USDC
+await agent.run("instant_borrow", { borrowAmount: "1000000000", collateralAmount: "500000000000000000", maxInterestRateBps: "800", duration: "1209600" });
+// Check health
+await agent.run("check_credit_status", { loanId: "42" });
+// Repay
+await agent.run("repay_credit", { loanId: "42" });
+// Rollover
+await agent.run("repay_and_reborrow", { loanId: "42" });
 ```
 
 ## Architecture
@@ -20,7 +39,7 @@ npm install floe-agent @coinbase/agentkit viem zod
 │                                                             │
 │  ┌─────────────┐    ┌──────────┐    ┌────────────────────┐ │
 │  │     LLM     │───>│ AgentKit │───>│ FloeActionProvider │ │
-│  │ (GPT/Claude)│    │          │    │   (30+ actions)     │ │
+│  │ (GPT/Claude)│    │          │    │   (36 actions)      │ │
 │  └─────────────┘    └────┬─────┘    └────────┬───────────┘ │
 │                          │                   │             │
 │                          v                   │             │
@@ -131,6 +150,17 @@ All write actions **auto-approve** tokens to the LendingIntentMatcher with a 1% 
 | `check_flash_arb_readiness` | Check environment readiness (fee, liquidity, oracle, router) |
 | `verify_flash_arb_receiver` | Verify a receiver's owner and immutable config |
 
+### x402 Credit Delegation Actions (6)
+
+| Action | Description |
+|--------|-------------|
+| `grant_credit_delegation` | Delegate borrowing authority to a facilitator (sets operator + collateral approval) |
+| `revoke_credit_delegation` | Revoke a facilitator's borrowing authority |
+| `check_credit_delegation` | Check delegation status (approved, limits, borrowed, expiry) |
+| `x402_fetch` | Fetch a URL with automatic x402 payment handling |
+| `x402_get_balance` | Check x402 credit balance |
+| `x402_get_transactions` | List recent x402 payment transactions |
+
 ### Session State
 
 When you deploy via `deploy_flash_arb_receiver`, the contract address is stored on the provider instance. Subsequent calls to `flash_arb`, `get_flash_arb_balance`, and `verify_flash_arb_receiver` auto-use it — no need to pass the address again. You can always override by passing `receiverAddress` explicitly.
@@ -184,7 +214,7 @@ const tools = await getLangChainTools(agentkit);
 
 ### MCP Server (Claude Desktop / Cursor)
 
-Expose all 23 Floe actions as MCP tools using the AgentKit MCP extension:
+Expose all 36 Floe actions as MCP tools using the AgentKit MCP extension:
 
 ```bash
 npm install @coinbase/agentkit-model-context-protocol @modelcontextprotocol/sdk
@@ -227,7 +257,7 @@ Configure in Claude Desktop (`claude_desktop_config.json`):
 }
 ```
 
-This exposes all 30+ actions as tools in Claude Desktop, Cursor, or any MCP-compatible client.
+This exposes all 36 actions as tools in Claude Desktop, Cursor, or any MCP-compatible client.
 
 ### OpenAI Agents SDK
 
@@ -242,7 +272,7 @@ Then register `floeActionProvider()` alongside the built-in action providers.
 
 ## CLI: `floe-agent`
 
-Interactive conversational agent for testing all 30+ actions without writing any framework code.
+Interactive conversational agent for testing all 36 actions without writing any framework code.
 
 ### Run directly
 
@@ -409,7 +439,7 @@ console.log(result);
 
 ## Local Development & Testing
 
-Three ways to test `@floe/agentkit-actions` without publishing to npm:
+Three ways to test `floe-agent` without publishing to npm:
 
 ### 1. `npm link` (live symlink)
 
@@ -419,10 +449,10 @@ npm run build
 npm link
 
 # In your consumer project
-npm link @floe/agentkit-actions
+npm link floe-agent
 ```
 
-Changes to the source are picked up after `npm run build`. Unlink with `npm unlink @floe/agentkit-actions`.
+Changes to the source are picked up after `npm run build`. Unlink with `npm unlink floe-agent`.
 
 ### 2. `file:` protocol (package.json reference)
 
@@ -431,7 +461,7 @@ In your consumer project's `package.json`:
 ```json
 {
   "dependencies": {
-    "@floe/agentkit-actions": "file:../agentkit-actions"
+    "floe-agent": "file:../agentkit-actions"
   }
 }
 ```
@@ -510,3 +540,14 @@ examples/
 | Matching | Automatic (pool) | Solver bots match offers |
 | Liquidation | Pool absorbs bad debt | Per-loan, with incentive |
 | Flash loans | From pool reserves | From protocol with receiver contract |
+
+## Links
+
+- [Website](https://floelabs.xyz)
+- [Documentation](https://docs.floelabs.xyz)
+- [Python counterpart (floe-agentkit-actions)](https://github.com/floelabs/agentkit-actions-py)
+- [MCP Server (@floelabs/mcp-server)](https://github.com/floelabs/floe-mcp-server)
+
+## License
+
+MIT
