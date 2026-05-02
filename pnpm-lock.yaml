@@ -14,9 +14,6 @@ importers:
       '@ai-sdk/openai':
         specifier: ^3.0.41
         version: 3.0.50(zod@3.25.76)
-      '@floe/credit-sdk':
-        specifier: file:../floe-monorepo/packages/credit-sdk
-        version: file:../floe-monorepo/packages/credit-sdk(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@3.25.76)
       '@inquirer/prompts':
         specifier: ^7.0.0
         version: 7.10.1(@types/node@25.5.2)
@@ -245,9 +242,6 @@ packages:
     engines: {node: '>=12'}
     cpu: [x64]
     os: [win32]
-
-  '@floe/credit-sdk@file:../floe-monorepo/packages/credit-sdk':
-    resolution: {directory: ../floe-monorepo/packages/credit-sdk, type: directory}
 
   '@hpke/chacha20poly1305@1.8.0':
     resolution: {integrity: sha512-FcBfAQ+Y99vMNJP2yrZ9wpL8V0GOwp1+zMyzvc6alasrBygfFjFm1yeUtyADJCu/27C3Lm5mJzx6u7pwg+cX5w==}
@@ -1941,15 +1935,6 @@ snapshots:
 
   '@esbuild/win32-x64@0.21.5':
     optional: true
-
-  '@floe/credit-sdk@file:../floe-monorepo/packages/credit-sdk(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@3.25.76)':
-    dependencies:
-      viem: 2.47.10(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)(zod@3.25.76)
-    transitivePeerDependencies:
-      - bufferutil
-      - typescript
-      - utf-8-validate
-      - zod
 
   '@hpke/chacha20poly1305@1.8.0':
     dependencies:
