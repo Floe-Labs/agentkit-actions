@@ -530,21 +530,11 @@ examples/
   .env.example             # Environment variable template
 ```
 
-## How Floe Differs from Aave/Compound
-
-| Feature | Aave/Compound | Floe |
-|---------|--------------|------|
-| Model | Pool-based, variable rate | Intent-based, fixed rate |
-| Rate | Algorithmic, changes per block | Fixed at match time |
-| Term | Open-ended | Fixed duration |
-| Matching | Automatic (pool) | Solver bots match offers |
-| Liquidation | Pool absorbs bad debt | Per-loan, with incentive |
-| Flash loans | From pool reserves | From protocol with receiver contract |
 
 ## Links
 
 - [Website](https://floelabs.xyz)
-- [Documentation](https://docs.floelabs.xyz)
+- [Documentation](https://floe-labs.gitbook.io/docs)
 - [Python counterpart (floe-agentkit-actions)](https://github.com/floelabs/agentkit-actions-py)
 - [MCP Server (@floelabs/mcp-server)](https://github.com/floelabs/floe-mcp-server)
 
