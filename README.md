@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Base Mainnet](https://img.shields.io/badge/Base-Mainnet-0052FF)](https://basescan.org/address/0x17946cD3e180f82e632805e5549EC913330Bb175)
 
-Coinbase AgentKit ActionProvider for the [Floe](https://floelabs.xyz) DeFi lending protocol on Base.
+Coinbase AgentKit ActionProvider for the [Floe](https://dev-dashboard.floelabs.xyz) DeFi credit protocol on Base.
 
 Provides **36 actions** for AI agents: DeFi lending, instant credit facilities, flash loan arbitrage, and x402 credit delegation. Works with any framework: Vercel AI SDK, LangChain, OpenAI Agents SDK, or as an MCP server for Claude Desktop / Cursor.
 
@@ -533,7 +533,7 @@ examples/
 
 ## Links
 
-- [Website](https://floelabs.xyz)
+- [Website](https://dev-dashboard.floelabs.xyz)
 - [Documentation](https://floe-labs.gitbook.io/docs)
 - [Python counterpart (floe-agentkit-actions)](https://github.com/floelabs/agentkit-actions-py)
 - [MCP Server (@floelabs/mcp-server)](https://github.com/floelabs/floe-mcp-server)
