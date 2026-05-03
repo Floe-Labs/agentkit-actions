@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://floe-labs.gitbook.io/docs
+    about: Check the docs before filing an issue
+  - name: Security Vulnerability
+    url: mailto:security@floelabs.xyz
+    about: Report security issues privately via email — do NOT open a public issue
