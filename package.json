@@ -1,6 +1,6 @@
 {
   "name": "floe-agent",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Coinbase AgentKit ActionProvider for Floe DeFi lending protocol",
   "license": "MIT",
   "repository": {

@@ -70,6 +70,53 @@ export const X402GetTransactionsSchema = z.object({
   limit: z.string().default("20").describe("Number of transactions to return"),
 });
 
+// ── Agent Awareness schemas ─────────────────────────────────────────────────
+// The 9 actions below let an agent reason about its own credit before
+// committing capital. Identity is taken from the configured facilitatorApiKey
+// (Bearer), so none of these accept a wallet address parameter.
+
+export const GetCreditRemainingSchema = z.object({});
+export const GetLoanStateSchema = z.object({});
+export const GetSpendLimitSchema = z.object({});
+
+export const SetSpendLimitSchema = z.object({
+  limitRaw: z
+    .string()
+    .regex(/^[1-9]\d*$/, "Must be a positive integer (raw USDC, 6 decimals)")
+    .describe("Session spend cap in raw USDC units (6 decimals). e.g. '1000000' = $1."),
+});
+
+export const ClearSpendLimitSchema = z.object({});
+export const ListCreditThresholdsSchema = z.object({});
+
+export const RegisterCreditThresholdSchema = z.object({
+  thresholdBps: z
+    .number()
+    .int()
+    .min(1)
+    .max(10000)
+    .describe("Utilization threshold in bps (5000 = 50%, 9500 = 95% triggers credit.at_limit)."),
+  webhookId: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Optional webhook id to pin to (must be owned by this developer). Omit for fanout."),
+});
+
+export const DeleteCreditThresholdSchema = z.object({
+  id: z.number().int().positive().describe("Threshold subscription id from list_credit_thresholds."),
+});
+
+export const EstimateX402CostSchema = z.object({
+  url: z.string().url().describe("Target x402-protected URL to preflight."),
+  method: z
+    .string()
+    .regex(/^[A-Z]{3,7}$/)
+    .optional()
+    .describe("HTTP method (default GET)."),
+});
+
 // ── ABI fragments for operator functions ────────────────────────────────────
 
 const OPERATOR_ABI = [
@@ -608,6 +655,378 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") return "Request timed out.";
       return `Error fetching transactions: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // AGENT AWARENESS (9) — answer "do I have credit?", "is this call worth
+  // it?", "where am I in the loan lifecycle?" before committing capital.
+  // All require facilitatorApiKey to be set on the provider config.
+  // ════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Internal helper for the agent-awareness actions: parse an error response
+   * shape and return a human-readable string. Centralized here so each new
+   * action stays readable. Returns null on success (response was JSON-parsed
+   * and the caller can use it).
+   */
+  private async readJsonOrError(resp: Response): Promise<{ ok: true; data: unknown } | { ok: false; msg: string }> {
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ error: resp.statusText }));
+      const e = err as { error?: string; detail?: string; message?: string };
+      const msg = e.detail ?? e.error ?? e.message ?? resp.statusText;
+      return { ok: false, msg };
+    }
+    // 204 No Content (and any other empty-body 2xx) is a legitimate success
+    // shape — return an empty object so DELETE handlers don't surface a
+    // false "Invalid JSON" to the caller. The text-then-parse pattern is
+    // safer than `resp.json()` because `JSON.parse('')` throws.
+    if (resp.status === 204) return { ok: true, data: {} };
+    const text = await resp.text();
+    if (text.length === 0) return { ok: true, data: {} };
+    try {
+      return { ok: true, data: JSON.parse(text) };
+    } catch {
+      return { ok: false, msg: "Invalid JSON in response" };
+    }
+  }
+
+  // ── get_credit_remaining ────────────────────────────────────────────────
+
+  @CreateAction({
+    name: "get_credit_remaining",
+    description:
+      "Return the calling agent's current credit headroom: available USDC, headroomToAutoBorrow, " +
+      "utilizationBps, and any active session spend-limit. Use BEFORE deciding whether to make a paid call.",
+    schema: GetCreditRemainingSchema,
+  })
+  async getCreditRemaining(
+    _walletProvider: EvmWalletProvider,
+    _args: z.infer<typeof GetCreditRemainingSchema>,
+  ): Promise<string> {
+    try {
+      const resp = await this.facilitatorFetch("/agents/credit-remaining");
+      const result = await this.readJsonOrError(resp);
+      if (!result.ok) return `Error: ${result.msg}`;
+      const d = result.data as {
+        available: string;
+        creditLimit: string;
+        headroomToAutoBorrow: string;
+        utilizationBps: number;
+        sessionSpendLimit: string | null;
+        sessionSpendRemaining: string | null;
+      };
+      const usdc = 6;
+      const lines = [
+        "## Credit Remaining\n",
+        `**Available**: ${formatTokenAmount(BigInt(d.available), usdc, "USDC")}`,
+        `**Credit Limit**: ${formatTokenAmount(BigInt(d.creditLimit), usdc, "USDC")}`,
+        `**Headroom to Auto-Borrow**: ${formatTokenAmount(BigInt(d.headroomToAutoBorrow), usdc, "USDC")}`,
+        `**Utilization**: ${formatBps(BigInt(d.utilizationBps))}`,
+      ];
+      if (d.sessionSpendLimit) {
+        lines.push(
+          `**Session Cap**: ${formatTokenAmount(BigInt(d.sessionSpendLimit), usdc, "USDC")} ` +
+          `(remaining ${formatTokenAmount(BigInt(d.sessionSpendRemaining ?? "0"), usdc, "USDC")})`,
+        );
+      }
+      return lines.join("\n");
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") return "Request timed out.";
+      return `Error fetching credit-remaining: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  // ── get_loan_state ──────────────────────────────────────────────────────
+
+  @CreateAction({
+    name: "get_loan_state",
+    description:
+      "Return the agent's coarse loan state-machine view: idle | borrowing | at_limit | repaying. " +
+      "Use to gate actions that only make sense in specific states (e.g. don't spend while at_limit).",
+    schema: GetLoanStateSchema,
+  })
+  async getLoanState(
+    _walletProvider: EvmWalletProvider,
+    _args: z.infer<typeof GetLoanStateSchema>,
+  ): Promise<string> {
+    try {
+      const resp = await this.facilitatorFetch("/agents/loan-state");
+      const result = await this.readJsonOrError(resp);
+      if (!result.ok) return `Error: ${result.msg}`;
+      const d = result.data as { state: string; reason: string; details?: Record<string, unknown> };
+      return [
+        "## Loan State\n",
+        `**State**: ${d.state}`,
+        `**Reason**: ${d.reason}`,
+        d.details ? `**Details**: ${JSON.stringify(d.details, null, 2)}` : "",
+      ].filter(Boolean).join("\n");
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") return "Request timed out.";
+      return `Error fetching loan-state: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  // ── get_spend_limit ─────────────────────────────────────────────────────
+
+  @CreateAction({
+    name: "get_spend_limit",
+    description:
+      "Return the agent's currently-active session spend cap, if any. Returns inactive when no cap is set.",
+    schema: GetSpendLimitSchema,
+  })
+  async getSpendLimit(
+    _walletProvider: EvmWalletProvider,
+    _args: z.infer<typeof GetSpendLimitSchema>,
+  ): Promise<string> {
+    try {
+      const resp = await this.facilitatorFetch("/agents/spend-limit");
+      const result = await this.readJsonOrError(resp);
+      if (!result.ok) return `Error: ${result.msg}`;
+      const d = result.data as {
+        active: boolean;
+        limitRaw: string | null;
+        sessionSpentRaw?: string;
+        sessionRemainingRaw?: string;
+      };
+      if (!d.active) return "## Spend Limit\n\nNo session spend cap set.";
+      const usdc = 6;
+      return [
+        "## Spend Limit\n",
+        `**Cap**: ${formatTokenAmount(BigInt(d.limitRaw ?? "0"), usdc, "USDC")}`,
+        `**Spent this session**: ${formatTokenAmount(BigInt(d.sessionSpentRaw ?? "0"), usdc, "USDC")}`,
+        `**Remaining**: ${formatTokenAmount(BigInt(d.sessionRemainingRaw ?? "0"), usdc, "USDC")}`,
+      ].join("\n");
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") return "Request timed out.";
+      return `Error fetching spend-limit: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  // ── set_spend_limit ─────────────────────────────────────────────────────
+
+  @CreateAction({
+    name: "set_spend_limit",
+    description:
+      "Set or update the agent's session spend cap (raw USDC, 6 decimals). Resets the session window — " +
+      "anything spent before this call no longer counts. Operator-defined; distinct from the on-chain creditLimit.",
+    schema: SetSpendLimitSchema,
+  })
+  async setSpendLimit(
+    _walletProvider: EvmWalletProvider,
+    args: z.infer<typeof SetSpendLimitSchema>,
+  ): Promise<string> {
+    try {
+      const resp = await this.facilitatorFetch("/agents/spend-limit", {
+        method: "PUT",
+        body: JSON.stringify({ limitRaw: args.limitRaw }),
+      });
+      const result = await this.readJsonOrError(resp);
+      if (!result.ok) return `Error: ${result.msg}`;
+      const d = result.data as { limitRaw: string; sessionStartedAt: string };
+      return [
+        "## Spend Limit Set\n",
+        `**Cap**: ${formatTokenAmount(BigInt(d.limitRaw), 6, "USDC")}`,
+        `**Session Started**: ${d.sessionStartedAt}`,
+      ].join("\n");
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") return "Request timed out.";
+      return `Error setting spend-limit: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  // ── clear_spend_limit ───────────────────────────────────────────────────
+
+  @CreateAction({
+    name: "clear_spend_limit",
+    description:
+      "Remove the agent's session spend cap. Subsequent paid calls will only be bounded by the on-chain creditLimit.",
+    schema: ClearSpendLimitSchema,
+  })
+  async clearSpendLimit(
+    _walletProvider: EvmWalletProvider,
+    _args: z.infer<typeof ClearSpendLimitSchema>,
+  ): Promise<string> {
+    try {
+      const resp = await this.facilitatorFetch("/agents/spend-limit", { method: "DELETE" });
+      const result = await this.readJsonOrError(resp);
+      if (!result.ok) return `Error: ${result.msg}`;
+      return "## Spend Limit Cleared\n\nNo cap is now active.";
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") return "Request timed out.";
+      return `Error clearing spend-limit: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  // ── list_credit_thresholds ──────────────────────────────────────────────
+
+  @CreateAction({
+    name: "list_credit_thresholds",
+    description:
+      "List the agent's registered credit-utilization thresholds. Each fires a credit.warning / " +
+      "credit.at_limit / credit.recovered webhook when crossed.",
+    schema: ListCreditThresholdsSchema,
+  })
+  async listCreditThresholds(
+    _walletProvider: EvmWalletProvider,
+    _args: z.infer<typeof ListCreditThresholdsSchema>,
+  ): Promise<string> {
+    try {
+      const resp = await this.facilitatorFetch("/agents/credit-thresholds");
+      const result = await this.readJsonOrError(resp);
+      if (!result.ok) return `Error: ${result.msg}`;
+      const d = result.data as {
+        subscriptions: Array<{
+          id: number;
+          thresholdBps: number;
+          lastState: string;
+          lastFiredAt: string | null;
+          webhookId: number | null;
+        }>;
+      };
+      if (!d.subscriptions.length) return "## Credit Thresholds\n\nNone registered.";
+      const lines = ["## Credit Thresholds\n"];
+      for (const s of d.subscriptions) {
+        lines.push(
+          `**#${s.id}** ${formatBps(BigInt(s.thresholdBps))} — state: ${s.lastState}` +
+          (s.webhookId !== null ? ` (pinned webhook ${s.webhookId})` : "") +
+          (s.lastFiredAt ? ` (last fired ${s.lastFiredAt})` : ""),
+        );
+      }
+      return lines.join("\n");
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") return "Request timed out.";
+      return `Error listing thresholds: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  // ── register_credit_threshold ───────────────────────────────────────────
+
+  @CreateAction({
+    name: "register_credit_threshold",
+    description:
+      "Register a credit-utilization threshold. When utilizationBps crosses thresholdBps from below, " +
+      "the agent's webhook receives credit.warning (or credit.at_limit if >= 9500). Drops below → credit.recovered. " +
+      "Cap of 20 thresholds per agent.",
+    schema: RegisterCreditThresholdSchema,
+  })
+  async registerCreditThreshold(
+    _walletProvider: EvmWalletProvider,
+    args: z.infer<typeof RegisterCreditThresholdSchema>,
+  ): Promise<string> {
+    try {
+      const resp = await this.facilitatorFetch("/agents/credit-thresholds", {
+        method: "POST",
+        body: JSON.stringify({
+          thresholdBps: args.thresholdBps,
+          ...(args.webhookId !== undefined ? { webhookId: args.webhookId } : {}),
+        }),
+      });
+      const result = await this.readJsonOrError(resp);
+      if (!result.ok) return `Error: ${result.msg}`;
+      const d = result.data as {
+        id: number;
+        thresholdBps: number;
+        lastState: string;
+        webhookId: number | null;
+      };
+      return [
+        "## Credit Threshold Registered\n",
+        `**#${d.id}** at ${formatBps(BigInt(d.thresholdBps))} — state: ${d.lastState}` +
+          (d.webhookId !== null ? ` (pinned webhook ${d.webhookId})` : " (fanout to all credit.* webhooks)"),
+      ].join("\n");
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") return "Request timed out.";
+      return `Error registering threshold: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  // ── delete_credit_threshold ─────────────────────────────────────────────
+
+  @CreateAction({
+    name: "delete_credit_threshold",
+    description: "Delete one of the agent's credit-utilization thresholds by id (from list_credit_thresholds).",
+    schema: DeleteCreditThresholdSchema,
+  })
+  async deleteCreditThreshold(
+    _walletProvider: EvmWalletProvider,
+    args: z.infer<typeof DeleteCreditThresholdSchema>,
+  ): Promise<string> {
+    try {
+      const resp = await this.facilitatorFetch(`/agents/credit-thresholds/${args.id}`, { method: "DELETE" });
+      const result = await this.readJsonOrError(resp);
+      if (!result.ok) return `Error: ${result.msg}`;
+      return `## Credit Threshold Deleted\n\nThreshold #${args.id} removed.`;
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") return "Request timed out.";
+      return `Error deleting threshold: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  // ── estimate_x402_cost ──────────────────────────────────────────────────
+
+  @CreateAction({
+    name: "estimate_x402_cost",
+    description:
+      "Preflight an x402-protected URL and return its USDC cost without paying. Reflects against the " +
+      "calling agent's available credit and session spend-limit so you can decide gating in one round-trip. " +
+      "Use BEFORE x402_fetch.",
+    schema: EstimateX402CostSchema,
+  })
+  async estimateX402Cost(
+    _walletProvider: EvmWalletProvider,
+    args: z.infer<typeof EstimateX402CostSchema>,
+  ): Promise<string> {
+    try {
+      const resp = await this.facilitatorFetch("/x402/estimate", {
+        method: "POST",
+        body: JSON.stringify({ url: args.url, ...(args.method ? { method: args.method } : {}) }),
+      });
+      const result = await this.readJsonOrError(resp);
+      if (!result.ok) return `Error: ${result.msg}`;
+      const d = result.data as {
+        url: string;
+        method: string;
+        x402: boolean;
+        priceRaw?: string;
+        asset?: string;
+        network?: string;
+        payTo?: string;
+        cached: boolean;
+        reflection?: {
+          available: string;
+          willExceedAvailable: boolean;
+          willExceedHeadroom: boolean;
+          willExceedSpendLimit: boolean;
+        };
+      };
+      if (!d.x402) {
+        return `## x402 Estimate\n\n**${d.method} ${d.url}** is not x402-protected — no payment required.`;
+      }
+      const usdc = 6;
+      const lines = [
+        "## x402 Estimate\n",
+        `**${d.method} ${d.url}**`,
+        `**Price**: ${formatTokenAmount(BigInt(d.priceRaw ?? "0"), usdc, "USDC")}`,
+        `**Network**: ${d.network ?? "—"}`,
+        `**Pay To**: ${d.payTo ? formatAddress(d.payTo) : "—"}`,
+        `**Cached**: ${d.cached ? "yes" : "no"}`,
+      ];
+      if (d.reflection) {
+        const r = d.reflection;
+        lines.push(
+          "",
+          "### Decision",
+          `**Available**: ${formatTokenAmount(BigInt(r.available), usdc, "USDC")}`,
+          `**Would exceed available?**: ${r.willExceedAvailable ? "YES — DO NOT CALL" : "no"}`,
+          `**Would exceed auto-borrow headroom?**: ${r.willExceedHeadroom ? "YES" : "no"}`,
+          `**Would exceed session spend-limit?**: ${r.willExceedSpendLimit ? "YES — DO NOT CALL" : "no"}`,
+        );
+      }
+      return lines.join("\n");
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") return "Request timed out.";
+      return `Error estimating cost: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 }

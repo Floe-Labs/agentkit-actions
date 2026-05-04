@@ -6,7 +6,7 @@
 
 Coinbase AgentKit ActionProvider for the [Floe](https://dev-dashboard.floelabs.xyz) DeFi credit protocol on Base.
 
-Provides **36 actions** for AI agents: DeFi lending, instant credit facilities, flash loan arbitrage, and x402 credit delegation. Works with any framework: Vercel AI SDK, LangChain, OpenAI Agents SDK, or as an MCP server for Claude Desktop / Cursor.
+Provides **45 actions** for AI agents: DeFi lending, instant credit facilities, flash loan arbitrage, x402 credit delegation, and agent-awareness primitives (credit, spend-limit, thresholds, x402 cost preflight). Works with any framework: Vercel AI SDK, LangChain, OpenAI Agents SDK, or as an MCP server for Claude Desktop / Cursor.
 
 Also ships a **standalone CLI** (`floe-agent`) for interactive testing without any framework integration.
 
@@ -39,7 +39,7 @@ await agent.run("repay_and_reborrow", { loanId: "42" });
 │                                                             │
 │  ┌─────────────┐    ┌──────────┐    ┌────────────────────┐ │
 │  │     LLM     │───>│ AgentKit │───>│ FloeActionProvider │ │
-│  │ (GPT/Claude)│    │          │    │   (36 actions)      │ │
+│  │ (GPT/Claude)│    │          │    │   (45 actions)      │ │
 │  └─────────────┘    └────┬─────┘    └────────┬───────────┘ │
 │                          │                   │             │
 │                          v                   │             │
@@ -89,7 +89,7 @@ const agentkit = await AgentKit.from({
 });
 ```
 
-## Actions (36 total: 30 lending + 6 x402)
+## Actions (45 total: 30 lending + 6 x402 + 9 agent-awareness)
 
 ### Read Actions (8)
 
@@ -161,6 +161,24 @@ All write actions **auto-approve** tokens to the LendingIntentMatcher with a 1% 
 | `x402_get_balance` | Check x402 credit balance |
 | `x402_get_transactions` | List recent x402 payment transactions |
 
+### Agent Awareness Actions (9)
+
+Lets an agent answer "do I have credit?", "is this call worth it?", and "where am I in the loan lifecycle?" before committing capital. All require `facilitatorApiKey` to be configured on the provider.
+
+| Action | Description |
+|--------|-------------|
+| `get_credit_remaining` | Available USDC, headroom to auto-borrow, utilization in bps, session-cap state |
+| `get_loan_state` | Coarse state machine: `idle` \| `borrowing` \| `at_limit` \| `repaying` |
+| `get_spend_limit` | Currently active session spend cap, if any |
+| `set_spend_limit` | Set a session-level USDC ceiling (resets the session window) |
+| `clear_spend_limit` | Remove the session spend cap |
+| `list_credit_thresholds` | List registered credit-utilization webhook triggers |
+| `register_credit_threshold` | Register a webhook trigger at a utilization threshold (cap: 20 per agent) |
+| `delete_credit_threshold` | Remove a registered threshold |
+| `estimate_x402_cost` | Preflight an x402 URL — returns cost + reflection against your credit (no payment) |
+
+> **Decision-loop pattern:** call `estimate_x402_cost` → check `willExceedAvailable` / `willExceedSpendLimit` → conditionally `x402_fetch`. This is the "answer the 3 rational-agent questions in one round-trip" workflow.
+
 ### Session State
 
 When you deploy via `deploy_flash_arb_receiver`, the contract address is stored on the provider instance. Subsequent calls to `flash_arb`, `get_flash_arb_balance`, and `verify_flash_arb_receiver` auto-use it — no need to pass the address again. You can always override by passing `receiverAddress` explicitly.
@@ -214,7 +232,7 @@ const tools = await getLangChainTools(agentkit);
 
 ### MCP Server (Claude Desktop / Cursor)
 
-Expose all 36 Floe actions as MCP tools using the AgentKit MCP extension:
+Expose all 45 Floe actions as MCP tools using the AgentKit MCP extension:
 
 ```bash
 npm install @coinbase/agentkit-model-context-protocol @modelcontextprotocol/sdk
@@ -257,7 +275,7 @@ Configure in Claude Desktop (`claude_desktop_config.json`):
 }
 ```
 
-This exposes all 36 actions as tools in Claude Desktop, Cursor, or any MCP-compatible client.
+This exposes all 45 actions as tools in Claude Desktop, Cursor, or any MCP-compatible client.
 
 ### OpenAI Agents SDK
 
@@ -272,7 +290,7 @@ Then register `floeActionProvider()` alongside the built-in action providers.
 
 ## CLI: `floe-agent`
 
-Interactive conversational agent for testing all 36 actions without writing any framework code.
+Interactive conversational agent for testing all 45 actions without writing any framework code.
 
 ### Run directly
 
@@ -510,7 +528,7 @@ npm run build
 src/
   index.ts                 # Package entry point, exports both providers
   floeActionProvider.ts    # 23 lending actions (FloeActionProvider)
-  x402ActionProvider.ts    # 6 x402 credit actions (X402ActionProvider)
+  x402ActionProvider.ts    # 15 actions (6 x402 credit delegation + 9 agent-awareness)
   schemas.ts               # Zod schemas for lending action inputs
   constants.ts             # Contract addresses, ABIs, known tokens
   flashArbBytecode.ts      # Compiled FlashArbReceiver bytecode + constructor ABI
