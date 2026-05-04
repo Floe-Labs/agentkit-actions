@@ -113,7 +113,7 @@ export const EstimateX402CostSchema = z.object({
   method: z
     .string()
     .regex(/^[A-Z]{3,7}$/)
-    .optional()
+    .default("GET")
     .describe("HTTP method (default GET)."),
 });
 
@@ -980,7 +980,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     try {
       const resp = await this.facilitatorFetch("/x402/estimate", {
         method: "POST",
-        body: JSON.stringify({ url: args.url, ...(args.method ? { method: args.method } : {}) }),
+        body: JSON.stringify({ url: args.url, method: args.method }),
       });
       const result = await this.readJsonOrError(resp);
       if (!result.ok) return `Error: ${result.msg}`;
@@ -1004,10 +1004,15 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
         return `## x402 Estimate\n\n**${d.method} ${d.url}** is not x402-protected — no payment required.`;
       }
       const usdc = 6;
+      const asset = (d.asset ?? "USDC").toUpperCase();
+      const formattedPrice =
+        asset === "USDC"
+          ? formatTokenAmount(BigInt(d.priceRaw ?? "0"), usdc, "USDC")
+          : `${d.priceRaw ?? "0"} ${asset} (raw units)`;
       const lines = [
         "## x402 Estimate\n",
         `**${d.method} ${d.url}**`,
-        `**Price**: ${formatTokenAmount(BigInt(d.priceRaw ?? "0"), usdc, "USDC")}`,
+        `**Price**: ${formattedPrice}`,
         `**Network**: ${d.network ?? "—"}`,
         `**Pay To**: ${d.payTo ? formatAddress(d.payTo) : "—"}`,
         `**Cached**: ${d.cached ? "yes" : "no"}`,
