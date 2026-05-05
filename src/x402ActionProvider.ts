@@ -45,8 +45,9 @@ export const GrantCreditDelegationSchema = z.object({
     .describe(
       "Bounded collateral allowance to grant the matcher (raw token units). " +
       "Mutually exclusive with `unsafeInfiniteApproval`. " +
-      "If neither field is set, no approve tx is sent — call `approve_token` separately " +
-      "before any facilitator-initiated borrow can succeed.",
+      "If neither field is set, no approve tx is sent — the action returns the " +
+      "current matcher allowance in its response so the caller can decide whether " +
+      "to grant one externally via their wallet provider.",
     ),
   unsafeInfiniteApproval: z.boolean().optional()
     .describe(
@@ -294,7 +295,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
       "Grant credit delegation to an x402 facilitator. This allows the facilitator to borrow USDC on your behalf using your collateral. " +
       "The facilitator uses borrowed funds to pay for x402 API resources automatically. " +
       "You set a maximum borrow limit, interest rate cap, and expiry. " +
-      "This action: (1) calls the facilitator to create a Privy wallet for you, (2) calls setOperator on the lending contract, (3) approves your collateral token, (4) completes registration with the facilitator.",
+      "This action: (1) calls the facilitator to create a Privy wallet for you, (2) calls setOperator on the lending contract, (3) optionally approves the collateral token to the matcher (controlled by `collateralApproval` or `unsafeInfiniteApproval` — neither is set by default; the response reports whether an approve tx was sent and the current matcher allowance), (4) completes registration with the facilitator.",
     schema: GrantCreditDelegationSchema,
   })
   async grantCreditDelegation(
@@ -364,7 +365,10 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
       // delegation grant. Now the caller picks one of:
       //   unsafeInfiniteApproval=true → MAX_UINT256 (at-least semantics — no tx if already MAX)
       //   collateralApproval=<raw>    → set to exactly this amount (force-set, including DOWN)
-      //   neither set                 → no approve tx (caller handles via approve_token)
+      //   neither set                 → no approve tx; the response reports the current
+      //                                  matcher allowance so the caller knows whether their
+      //                                  wallet is already bounded or still has a stale
+      //                                  infinite grant from the old default
       //
       // The bounded path force-sets rather than using `ensureAllowance`'s
       // at-least semantics: a caller migrating from the old MAX_UINT256
@@ -375,6 +379,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
       // USDT-style approve(0)-first dance, so a single direct approve is
       // safe.
       let approveTxHash: string | null = null;
+      let currentAllowance: bigint | null = null;
       if (args.unsafeInfiniteApproval) {
         const MAX_UINT256 = BigInt("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
         approveTxHash = await this.ensureAllowance(
@@ -383,25 +388,30 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
           this.matcherAddress,
           MAX_UINT256,
         );
-      } else if (args.collateralApproval !== undefined) {
-        const requested = BigInt(args.collateralApproval);
-        const owner = (await walletProvider.getAddress()) as Address;
-        const current = (await walletProvider.readContract({
+      } else {
+        // Read once: the bounded path uses this for the force-set decision,
+        // and the neither-set path renders it back to the caller. Reusing
+        // `agentAddress` from above avoids a redundant getAddress() call.
+        currentAllowance = (await walletProvider.readContract({
           address: args.collateralToken as Address,
           abi: ERC20_ABI,
           functionName: "allowance",
-          args: [owner, this.matcherAddress],
+          args: [agentAddress as Address, this.matcherAddress],
         })) as bigint;
-        if (current !== requested) {
-          const data = encodeFunctionData({
-            abi: ERC20_ABI,
-            functionName: "approve",
-            args: [this.matcherAddress, requested],
-          });
-          approveTxHash = await walletProvider.sendTransaction({
-            to: args.collateralToken as Address,
-            data,
-          });
+
+        if (args.collateralApproval !== undefined) {
+          const requested = BigInt(args.collateralApproval);
+          if (currentAllowance !== requested) {
+            const data = encodeFunctionData({
+              abi: ERC20_ABI,
+              functionName: "approve",
+              args: [this.matcherAddress, requested],
+            });
+            approveTxHash = await walletProvider.sendTransaction({
+              to: args.collateralToken as Address,
+              data,
+            });
+          }
         }
       }
       const approvalRequested = args.unsafeInfiniteApproval === true || args.collateralApproval !== undefined;
@@ -446,9 +456,10 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
         "",
         `**setOperator tx**: ${setOpTxHash}`,
         approvalRequested
-          ? (approveTxHash ? `**Approval tx**: ${approveTxHash}` : "**Approval**: Already sufficient")
-          : "**Approval**: NOT SET — facilitator-initiated borrows will fail until you grant an allowance. " +
-            "Call `approve_token`, or re-run with `collateralApproval=<raw>` or `unsafeInfiniteApproval=true`.",
+          ? (approveTxHash ? `**Approval tx**: ${approveTxHash}` : "**Approval**: Already at requested amount")
+          : `**Approval**: No approval tx was sent. Current matcher allowance on this token (raw): ${currentAllowance ?? "unknown"}. ` +
+            "Re-run with `collateralApproval=<raw>` or `unsafeInfiniteApproval=true` to set a new bound, " +
+            "or grant an allowance through your wallet provider directly.",
         "",
         `> API key stored for this session (ending ...${keyPreview}).`,
         "> Pass it via `X402Config.facilitatorApiKey` if you need it across sessions.",

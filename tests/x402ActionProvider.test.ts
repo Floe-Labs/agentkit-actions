@@ -188,19 +188,37 @@ describe("grantCreditDelegation handler", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  test("default (neither flag) skips approve and surfaces NOT SET warning", async () => {
+  test("default (neither flag) skips approve and reports current matcher allowance", async () => {
+    // The "neither set" path now reads and reports the current matcher
+    // allowance instead of asserting that "facilitator-initiated borrows
+    // will fail" — which would be wrong if a stale MAX_UINT256 grant from
+    // the old default is still active. Tests two cases: zero allowance
+    // (caller needs to act) and non-zero (informative, no false alarm).
     const provider = makeProvider();
-    const wallet = new SpyWallet(0n);
     stubFacilitator();
-
     const args = GrantCreditDelegationSchema.parse({ ...BASE_ARGS });
-    const result = await provider.grantCreditDelegation(wallet as never, args);
 
-    expect(result).not.toContain("Error");
-    // No approve() targeting the collateral token.
-    expect(approveTxs(wallet)).toHaveLength(0);
-    // The result must call out the no-approval state.
-    expect(result).toContain("NOT SET");
+    // Case 1: clean wallet — allowance reads as 0 and is rendered.
+    const cleanWallet = new SpyWallet(0n);
+    const cleanResult = await provider.grantCreditDelegation(cleanWallet as never, args);
+    expect(cleanResult).not.toContain("Error");
+    expect(approveTxs(cleanWallet)).toHaveLength(0);
+    expect(cleanResult).toContain("No approval tx was sent");
+    expect(cleanResult).toMatch(/Current matcher allowance on this token \(raw\): 0\b/);
+    // Old misleading wording must be gone.
+    expect(cleanResult).not.toContain("NOT SET");
+    expect(cleanResult).not.toContain("approve_token");
+    expect(cleanResult).not.toContain("borrows will fail");
+
+    // Case 2: stale MAX_UINT256 from the old default — still no tx, but
+    // the response makes the leftover allowance visible to the caller.
+    const staleWallet = new SpyWallet(MAX_UINT256);
+    const staleResult = await provider.grantCreditDelegation(staleWallet as never, args);
+    expect(staleResult).not.toContain("Error");
+    expect(approveTxs(staleWallet)).toHaveLength(0);
+    expect(staleResult).toContain("No approval tx was sent");
+    expect(staleResult).toContain(MAX_UINT256.toString());
+    expect(staleResult).not.toContain("borrows will fail");
   });
 
   test("unsafeInfiniteApproval=true grants MAX_UINT256", async () => {
