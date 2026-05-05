@@ -43,9 +43,16 @@ export const GrantCreditDelegationSchema = z.object({
     .describe("Collateral token address (WETH or cbBTC)"),
   collateralApproval: NonNegIntString.optional()
     .describe(
-      "Optional bounded collateral allowance to grant the matcher (raw token units). " +
-      "If omitted, an unlimited approval is set (matches standard DeFi UX; matcher is a governance-controlled protocol). " +
-      "Set this to cap exposure if the matcher were ever compromised.",
+      "Bounded collateral allowance to grant the matcher (raw token units). " +
+      "Mutually exclusive with `unsafeInfiniteApproval`. " +
+      "If neither field is set, no approve tx is sent — call `approve_token` separately " +
+      "before any facilitator-initiated borrow can succeed.",
+    ),
+  unsafeInfiniteApproval: z.boolean().optional()
+    .describe(
+      "Opt in to unlimited (MAX_UINT256) collateral approval to the matcher. " +
+      "Saves one approve() per top-up but means a matcher compromise can drain " +
+      "your full collateral token balance. Mutually exclusive with `collateralApproval`.",
     ),
 });
 
@@ -248,6 +255,14 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     args: z.infer<typeof GrantCreditDelegationSchema>,
   ): Promise<string> {
     try {
+      // Reject incoherent approval combinations before any side effects (no
+      // facilitator pre-register, no on-chain setOperator). The schema accepts
+      // both fields so existing callers don't get a validation error from the
+      // framework; the choice is enforced here.
+      if (args.collateralApproval !== undefined && args.unsafeInfiniteApproval) {
+        return "Cannot set both `collateralApproval` and `unsafeInfiniteApproval` — pick one.";
+      }
+
       const agentAddress = await walletProvider.getAddress();
       const facilitatorUrl = args.facilitatorUrl.replace(/\/+$/, "");
 
@@ -296,16 +311,31 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
         data: setOperatorData,
       });
 
-      // Step 3: Approve collateral. Defaults to unlimited (matcher is a governance-controlled
-      // protocol; standard DeFi UX). Users can bound exposure via args.collateralApproval.
-      const MAX_UINT256 = BigInt("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
-      const approvalAmount = args.collateralApproval ? BigInt(args.collateralApproval) : MAX_UINT256;
-      const approveTxHash = await this.ensureAllowance(
-        walletProvider,
-        args.collateralToken as Address,
-        this.matcherAddress,
-        approvalAmount,
-      );
+      // Step 3: Approve collateral. The approve step is skipped unless the
+      // caller opts in explicitly. Previously this defaulted to MAX_UINT256,
+      // which silently granted the matcher unlimited spend power on every
+      // delegation grant. Now the caller picks one of:
+      //   unsafeInfiniteApproval=true → MAX_UINT256
+      //   collateralApproval=<raw>    → exact bounded amount
+      //   neither set                 → no approve tx (caller handles via approve_token)
+      let approveTxHash: string | null = null;
+      if (args.unsafeInfiniteApproval) {
+        const MAX_UINT256 = BigInt("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+        approveTxHash = await this.ensureAllowance(
+          walletProvider,
+          args.collateralToken as Address,
+          this.matcherAddress,
+          MAX_UINT256,
+        );
+      } else if (args.collateralApproval !== undefined) {
+        approveTxHash = await this.ensureAllowance(
+          walletProvider,
+          args.collateralToken as Address,
+          this.matcherAddress,
+          BigInt(args.collateralApproval),
+        );
+      }
+      const approvalRequested = args.unsafeInfiniteApproval === true || args.collateralApproval !== undefined;
 
       // Step 4: Complete registration with facilitator
       const regNonce = this.generateNonce();
@@ -346,7 +376,10 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
         `**Expires**: ${formatDuration(BigInt(args.expiryDays) * 86400n)}`,
         "",
         `**setOperator tx**: ${setOpTxHash}`,
-        approveTxHash ? `**Approval tx**: ${approveTxHash}` : "**Approval**: Already sufficient",
+        approvalRequested
+          ? (approveTxHash ? `**Approval tx**: ${approveTxHash}` : "**Approval**: Already sufficient")
+          : "**Approval**: NOT SET — facilitator-initiated borrows will fail until you grant an allowance. " +
+            "Call `approve_token`, or re-run with `collateralApproval=<raw>` or `unsafeInfiniteApproval=true`.",
         "",
         `> API key stored for this session (ending ...${keyPreview}).`,
         "> Pass it via `X402Config.facilitatorApiKey` if you need it across sessions.",
