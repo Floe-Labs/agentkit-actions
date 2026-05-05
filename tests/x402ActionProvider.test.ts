@@ -249,15 +249,61 @@ describe("grantCreditDelegation handler", () => {
     expect(amount).not.toBe(MAX_UINT256);
   });
 
-  test("ensureAllowance still short-circuits when current allowance covers request", async () => {
+  test("unsafeInfiniteApproval skips approve tx when allowance is already MAX_UINT256", async () => {
+    // The unsafe-infinite path keeps at-least semantics — there is no
+    // value in re-approving MAX when the wallet is already at MAX.
     const provider = makeProvider();
-    // Existing allowance already covers MAX_UINT256.
     const wallet = new SpyWallet(MAX_UINT256);
     stubFacilitator();
 
     const args = GrantCreditDelegationSchema.parse({
       ...BASE_ARGS,
       unsafeInfiniteApproval: true,
+    });
+    await provider.grantCreditDelegation(wallet as never, args);
+
+    expect(approveTxs(wallet)).toHaveLength(0);
+  });
+
+  test("collateralApproval force-sets DOWN when current allowance exceeds requested bound", async () => {
+    // The migration scenario flagged in PR review: a wallet that previously
+    // received the old MAX_UINT256 default re-runs grant_credit_delegation
+    // with collateralApproval=<raw>. The bounded path MUST issue an
+    // approve(requested) to actually reduce the allowance — otherwise the
+    // caller walks away with the old infinite allowance still active and a
+    // false sense of bounded exposure (this is the bug Copilot caught on
+    // PR #17).
+    const provider = makeProvider();
+    const wallet = new SpyWallet(MAX_UINT256); // legacy infinite allowance
+    stubFacilitator();
+
+    const bounded = "1000";
+    const args = GrantCreditDelegationSchema.parse({
+      ...BASE_ARGS,
+      collateralApproval: bounded,
+    });
+    await provider.grantCreditDelegation(wallet as never, args);
+
+    const approves = approveTxs(wallet);
+    expect(approves).toHaveLength(1);
+    const { spender, amount } = decodeApprove(approves[0].data);
+    expect(spender.toLowerCase()).toBe(MATCHER_ADDRESS.toLowerCase());
+    // Force-set down to the exact requested cap, not the existing MAX.
+    expect(amount).toBe(BigInt(bounded));
+    expect(amount).not.toBe(MAX_UINT256);
+  });
+
+  test("collateralApproval skips approve tx only when current allowance already equals the requested bound", async () => {
+    // Gas-saving short-circuit on the bounded path: when current allowance
+    // is already exactly the requested amount, no tx is needed.
+    const provider = makeProvider();
+    const bounded = 1000n;
+    const wallet = new SpyWallet(bounded);
+    stubFacilitator();
+
+    const args = GrantCreditDelegationSchema.parse({
+      ...BASE_ARGS,
+      collateralApproval: bounded.toString(),
     });
     await provider.grantCreditDelegation(wallet as never, args);
 

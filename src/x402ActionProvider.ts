@@ -315,9 +315,18 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
       // caller opts in explicitly. Previously this defaulted to MAX_UINT256,
       // which silently granted the matcher unlimited spend power on every
       // delegation grant. Now the caller picks one of:
-      //   unsafeInfiniteApproval=true → MAX_UINT256
-      //   collateralApproval=<raw>    → exact bounded amount
+      //   unsafeInfiniteApproval=true → MAX_UINT256 (at-least semantics — no tx if already MAX)
+      //   collateralApproval=<raw>    → set to exactly this amount (force-set, including DOWN)
       //   neither set                 → no approve tx (caller handles via approve_token)
+      //
+      // The bounded path force-sets rather than using `ensureAllowance`'s
+      // at-least semantics: a caller migrating from the old MAX_UINT256
+      // default to a bounded value otherwise no-ops here and walks away
+      // with the old infinite allowance still active — exactly the false
+      // sense of bounded exposure this PR is meant to remove. WETH and
+      // cbBTC (the only collaterals the schema accepts) don't need the
+      // USDT-style approve(0)-first dance, so a single direct approve is
+      // safe.
       let approveTxHash: string | null = null;
       if (args.unsafeInfiniteApproval) {
         const MAX_UINT256 = BigInt("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
@@ -328,12 +337,25 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
           MAX_UINT256,
         );
       } else if (args.collateralApproval !== undefined) {
-        approveTxHash = await this.ensureAllowance(
-          walletProvider,
-          args.collateralToken as Address,
-          this.matcherAddress,
-          BigInt(args.collateralApproval),
-        );
+        const requested = BigInt(args.collateralApproval);
+        const owner = (await walletProvider.getAddress()) as Address;
+        const current = (await walletProvider.readContract({
+          address: args.collateralToken as Address,
+          abi: ERC20_ABI,
+          functionName: "allowance",
+          args: [owner, this.matcherAddress],
+        })) as bigint;
+        if (current !== requested) {
+          const data = encodeFunctionData({
+            abi: ERC20_ABI,
+            functionName: "approve",
+            args: [this.matcherAddress, requested],
+          });
+          approveTxHash = await walletProvider.sendTransaction({
+            to: args.collateralToken as Address,
+            data,
+          });
+        }
       }
       const approvalRequested = args.unsafeInfiniteApproval === true || args.collateralApproval !== undefined;
 
