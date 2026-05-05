@@ -188,6 +188,25 @@ describe("grantCreditDelegation handler", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  test("rejects collateralApproval > uint256 max without any side effects", async () => {
+    // The schema's NonNegIntString already rejects negatives and non-numeric
+    // strings, but BigInt accepts arbitrary precision so a value >
+    // type(uint256).max would slip through to encodeFunctionData inside
+    // step 3 — after pre-register and setOperator have already landed.
+    // The upfront check in the handler catches this before any side effects.
+    const provider = makeProvider();
+    const wallet = new SpyWallet();
+    const fetchSpy = stubFacilitator();
+
+    const overflow = (1n << 256n).toString(); // exactly one past uint256 max
+    const args = GrantCreditDelegationSchema.parse({ ...BASE_ARGS, collateralApproval: overflow });
+    const result = await provider.grantCreditDelegation(wallet as never, args);
+
+    expect(result.toLowerCase()).toContain("uint256");
+    expect(wallet.sent).toHaveLength(0);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   test("default (neither flag) skips approve and reports current matcher allowance", async () => {
     // The "neither set" path now reads and reports the current matcher
     // allowance instead of asserting that "facilitator-initiated borrows

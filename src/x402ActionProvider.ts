@@ -311,6 +311,22 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
         return "Cannot set both `collateralApproval` and `unsafeInfiniteApproval` — pick one.";
       }
 
+      // Validate `collateralApproval` upfront. The schema's NonNegIntString
+      // already rejects negatives and non-numeric strings, but BigInt accepts
+      // arbitrary precision so a value > uint256 still slips through to the
+      // ABI encoder, which would throw inside step 3 — after pre-register
+      // and setOperator have already landed. Cache the parsed BigInt for
+      // step 3 so we don't reparse and don't risk drift between the check
+      // and the call site.
+      const MAX_UINT256 = (1n << 256n) - 1n;
+      let requestedCollateralApproval: bigint | undefined;
+      if (args.collateralApproval !== undefined) {
+        requestedCollateralApproval = BigInt(args.collateralApproval);
+        if (requestedCollateralApproval > MAX_UINT256) {
+          return `collateralApproval is too large for uint256 (${requestedCollateralApproval}).`;
+        }
+      }
+
       const agentAddress = await walletProvider.getAddress();
       const facilitatorUrl = args.facilitatorUrl.replace(/\/+$/, "");
 
@@ -381,7 +397,6 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
       let approveTxHash: string | null = null;
       let currentAllowance: bigint | null = null;
       if (args.unsafeInfiniteApproval) {
-        const MAX_UINT256 = BigInt("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
         approveTxHash = await this.ensureAllowance(
           walletProvider,
           args.collateralToken as Address,
@@ -399,13 +414,12 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
           args: [agentAddress as Address, this.matcherAddress],
         })) as bigint;
 
-        if (args.collateralApproval !== undefined) {
-          const requested = BigInt(args.collateralApproval);
-          if (currentAllowance !== requested) {
+        if (requestedCollateralApproval !== undefined) {
+          if (currentAllowance !== requestedCollateralApproval) {
             const data = encodeFunctionData({
               abi: ERC20_ABI,
               functionName: "approve",
-              args: [this.matcherAddress, requested],
+              args: [this.matcherAddress, requestedCollateralApproval],
             });
             approveTxHash = await walletProvider.sendTransaction({
               to: args.collateralToken as Address,
