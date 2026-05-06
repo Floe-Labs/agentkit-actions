@@ -67,8 +67,15 @@ class SpyWallet {
     return "0x" + "cd".repeat(32);
   }
 
+  public failAllowanceRead = false;
+
   async readContract(req: { functionName: string }): Promise<bigint> {
-    if (req.functionName === "allowance") return this.currentAllowance;
+    if (req.functionName === "allowance") {
+      if (this.failAllowanceRead) {
+        throw new Error("simulated transient RPC error reading allowance");
+      }
+      return this.currentAllowance;
+    }
     throw new Error(`Unexpected readContract: ${req.functionName}`);
   }
 
@@ -345,5 +352,53 @@ describe("grantCreditDelegation handler", () => {
     await provider.grantCreditDelegation(wallet as never, args);
 
     expect(approveTxs(wallet)).toHaveLength(0);
+  });
+
+  test("neither flag with allowance read failure still completes grant and renders 'unknown'", async () => {
+    // The allowance read on the neither-set path is purely informational.
+    // A transient RPC failure here AFTER setOperator has already landed
+    // on-chain must NOT abort the grant — the caller would never reach
+    // /agents/register, never get their API key, and would have to manually
+    // revoke an active on-chain delegation.
+    const provider = makeProvider();
+    const wallet = new SpyWallet(0n);
+    wallet.failAllowanceRead = true;
+    stubFacilitator();
+
+    const args = GrantCreditDelegationSchema.parse({ ...BASE_ARGS });
+    const result = await provider.grantCreditDelegation(wallet as never, args);
+
+    expect(result).toContain("Credit Delegation Granted");
+    expect(result).not.toContain("Error");
+    // The neither-set path renders "unknown" when the allowance read fails.
+    expect(result.toLowerCase()).toContain("unknown");
+    // No approve tx — neither flag was set.
+    expect(approveTxs(wallet)).toHaveLength(0);
+  });
+
+  test("bounded path with allowance read failure still sends approve(requested)", async () => {
+    // On the bounded path the allowance read is used to decide whether
+    // to skip a redundant approve. If the read fails we can't decide —
+    // but we must honor the caller's bound, so send approve(requested)
+    // unconditionally rather than risk leaving the prior allowance in place.
+    const provider = makeProvider();
+    const wallet = new SpyWallet(0n);
+    wallet.failAllowanceRead = true;
+    stubFacilitator();
+
+    const bounded = "12345";
+    const args = GrantCreditDelegationSchema.parse({
+      ...BASE_ARGS,
+      collateralApproval: bounded,
+    });
+    const result = await provider.grantCreditDelegation(wallet as never, args);
+
+    expect(result).toContain("Credit Delegation Granted");
+    expect(result).not.toContain("Error");
+
+    const approves = approveTxs(wallet);
+    expect(approves).toHaveLength(1);
+    const { amount } = decodeApprove(approves[0].data);
+    expect(amount).toBe(BigInt(bounded));
   });
 });

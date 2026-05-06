@@ -404,18 +404,35 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
           MAX_UINT256,
         );
       } else {
-        // Read once: the bounded path uses this for the force-set decision,
-        // and the neither-set path renders it back to the caller. Reusing
+        // Read once: the bounded path uses this for the force-set decision
+        // (skip approve tx when current already equals requested), and the
+        // neither-set path renders it back to the caller. Reusing
         // `agentAddress` from above avoids a redundant getAddress() call.
-        currentAllowance = (await walletProvider.readContract({
-          address: args.collateralToken as Address,
-          abi: ERC20_ABI,
-          functionName: "allowance",
-          args: [agentAddress as Address, this.matcherAddress],
-        })) as bigint;
+        //
+        // The read is non-essential — if a transient RPC error fails it
+        // AFTER setOperator has already landed on-chain, we must not abort
+        // the whole grant: the caller would never reach /agents/register,
+        // never get their API key, and would have to manually revoke an
+        // active on-chain delegation.
+        //   Bounded path: send approve(requested) unconditionally — the
+        //     read failure means we can't decide whether to skip, and
+        //     over-sending an approve at the same value is at worst a
+        //     tiny gas cost.
+        //   Neither-set path: response renders "unknown" via the existing
+        //     branch in the message-formatting code.
+        try {
+          currentAllowance = (await walletProvider.readContract({
+            address: args.collateralToken as Address,
+            abi: ERC20_ABI,
+            functionName: "allowance",
+            args: [agentAddress as Address, this.matcherAddress],
+          })) as bigint;
+        } catch {
+          currentAllowance = null;
+        }
 
         if (requestedCollateralApproval !== undefined) {
-          if (currentAllowance !== requestedCollateralApproval) {
+          if (currentAllowance === null || currentAllowance !== requestedCollateralApproval) {
             const data = encodeFunctionData({
               abi: ERC20_ABI,
               functionName: "approve",
@@ -428,7 +445,11 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
           }
         }
       }
-      const approvalRequested = args.unsafeInfiniteApproval === true || args.collateralApproval !== undefined;
+      // Truthy on both sides for consistency with the `if (args.unsafeInfiniteApproval)`
+      // gate above. Earlier this used `=== true` here while the gate used
+      // truthy, which would diverge if a non-bool truthy value (e.g. 1)
+      // ever bypassed schema validation.
+      const approvalRequested = !!(args.unsafeInfiniteApproval || args.collateralApproval !== undefined);
 
       // Step 4: Complete registration with facilitator
       const regNonce = this.generateNonce();
