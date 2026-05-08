@@ -141,8 +141,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
       data,
     };
 
-    const chainId = await this.getChainIdNumber(walletProvider);
-    await this.requireNishvaultPreSendReceipt(txRequest, chainId);
+    await this.requireNishvaultPreSendReceipt(walletProvider, txRequest);
 
     const txHash = await walletProvider.sendTransaction(txRequest);
 
@@ -171,12 +170,14 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
     return null;
   }
 
-  private async requireNishvaultPreSendReceipt(tx: {
+  private async requireNishvaultPreSendReceipt(walletProvider: EvmWalletProvider, tx: {
     to: Address;
     data?: `0x${string}`;
     value?: bigint;
-  }, chainId: number | null): Promise<void> {
+  }): Promise<void> {
     if (process.env.NISHVAULT_PRE_SEND_GUARD !== "1") return;
+
+    const chainId = await this.getChainIdNumber(walletProvider);
 
     if (chainId === null) {
       throw new Error(
