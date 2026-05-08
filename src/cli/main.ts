@@ -299,6 +299,11 @@ const MARKET_PAIRS: { loan: `0x${string}`; collateral: `0x${string}`; label: str
     collateral: "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",  // cbBTC
     label: "USDT/cbBTC",
   },
+  {
+    loan: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",       // USDC
+    collateral: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",  // USDC (same-token market)
+    label: "USDC/USDC",
+  },
 ];
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

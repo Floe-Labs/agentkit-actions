@@ -83,6 +83,7 @@ const agentkit = await AgentKit.from({
       // Optional: defaults to Base Mainnet addresses
       knownMarketIds: [
         "0x...", // WETH/USDC market
+        // Same-token markets are also supported (e.g. USDC/USDC).
       ],
     }),
   ],

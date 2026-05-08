@@ -223,6 +223,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
       maxInterestRateBps: bigint;
       minLtvBps: bigint;
       duration: bigint;
+      market?: { loanToken: Address; collateralToken: Address } | any;
     },
   ): string | null {
     const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
@@ -265,10 +266,25 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
     if ((lendIntent.minInterestRateBps as bigint) > params.maxInterestRateBps) {
       return `Requested maxInterestRateBps (${params.maxInterestRateBps}) is below the lend intent's minimum rate (${lendIntent.minInterestRateBps}).`;
     }
-    // Protocol requires 800bps gap between borrower minLtvBps and lender maxLtvBps
-    const requiredMaxLtvBps = params.minLtvBps + 800n;
+    // Protocol requires a gap between borrower minLtvBps and lender maxLtvBps.
+    // Two-token markets: 800 bps. Same-token markets (e.g. USDC/USDC): 50 bps.
+    // LendIntent itself only carries marketId, so we read the token pair off the
+    // market struct passed in by the caller. If it's missing, fall back to the
+    // two-token default — the matcher will revert if we're wrong.
+    const marketLoanToken =
+      typeof params.market?.loanToken === "string" ? (params.market.loanToken as string) : undefined;
+    const marketCollateralToken =
+      typeof params.market?.collateralToken === "string"
+        ? (params.market.collateralToken as string)
+        : undefined;
+    const isSameToken =
+      !!marketLoanToken &&
+      !!marketCollateralToken &&
+      marketLoanToken.toLowerCase() === marketCollateralToken.toLowerCase();
+    const requiredGapBps = isSameToken ? 50n : 800n;
+    const requiredMaxLtvBps = params.minLtvBps + requiredGapBps;
     if ((lendIntent.maxLtvBps as bigint) < requiredMaxLtvBps) {
-      return `Requested minLtvBps (${params.minLtvBps}) requires lender maxLtvBps >= ${requiredMaxLtvBps} (800bps buffer), but the lend intent only allows ${lendIntent.maxLtvBps}.`;
+      return `Requested minLtvBps (${params.minLtvBps}) requires lender maxLtvBps >= ${requiredMaxLtvBps} (${requiredGapBps}bps buffer for ${isSameToken ? "same-token" : "two-token"} market), but the lend intent only allows ${lendIntent.maxLtvBps}.`;
     }
     if (params.duration < (lendIntent.minDuration as bigint) || params.duration > (lendIntent.maxDuration as bigint)) {
       return `Requested duration (${params.duration}s) is outside the lend intent's allowed range [${lendIntent.minDuration}, ${lendIntent.maxDuration}]s.`;
@@ -284,7 +300,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
   @CreateAction({
     name: "get_markets",
     description:
-      "Get information about Floe lending markets. Each market represents a unique loan token + collateral token pair with its own interest rate floor, LTV limits, and liquidation incentive. Unlike Aave/Compound pool-based lending, Floe markets are intent-based — lenders and borrowers post offers that get matched at fixed rates and terms.",
+      "Get information about Floe lending markets. Each market is a loan token + collateral token pair (which may be the same token, e.g. USDC/USDC) with its own interest rate floor, LTV limits, and liquidation incentive. Same-token markets allow LTVs up to 99.5% with a 50bps gap; cross-asset markets cap at 95% with an 800bps gap. Unlike Aave/Compound pool-based lending, Floe markets are intent-based — lenders and borrowers post offers that get matched at fixed rates and terms.",
     schema: GetMarketsSchema,
   })
   async getMarkets(
@@ -317,7 +333,11 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
           resolveTokenMeta(m.collateralToken, walletProvider),
         ]);
 
-        lines.push(`### Market: ${collMeta.symbol}/${loanMeta.symbol}`);
+        // Market labels use loan/collateral order to match the action description,
+        // the CLI MARKET_PAIRS labels (e.g. "USDC/WETH" = USDC loan, WETH collateral),
+        // and the request_credit listings. (Line 609's price pair is unrelated:
+        // "X / Y" there denotes "1 X expressed in Y".)
+        lines.push(`### Market: ${loanMeta.symbol}/${collMeta.symbol}`);
         lines.push(`- **Market ID**: ${ids[i]}`);
         lines.push(`- **Loan Token**: ${loanMeta.symbol} (${m.loanToken})`);
         lines.push(`- **Collateral Token**: ${collMeta.symbol} (${m.collateralToken})`);
@@ -2081,6 +2101,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
         maxInterestRateBps: BigInt(args.maxInterestRateBps),
         minLtvBps: BigInt(args.minLtvBps),
         duration: BigInt(args.duration),
+        market,
       });
       if (incompatibility) {
         return incompatibility;
@@ -2389,9 +2410,16 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
     try {
       const oldLoanId = BigInt(args.loanId);
       const slippageBps = BigInt(args.slippageBps);
+      const lendHash = args.lendIntentHash as `0x${string}`;
+      const marketId = args.marketId as `0x${string}`;
 
-      // ── Phase 1: Repay existing loan ──────────────────────────────────
-      const [oldLoan, interestData] = await Promise.all([
+      // ── Phase 0: Preflight ────────────────────────────────────────────
+      // Validate the new lend intent BEFORE repaying the old loan. If we repay
+      // first and then discover the new intent is incompatible (revoked, wrong
+      // market, LTV gap, rate, duration, partial-fill, etc.), the user is left
+      // without a loan AND with a stray borrow intent that will fail at match.
+      // All four reads run in parallel — same RPC cost as the original split.
+      const [oldLoan, interestData, market, lendIntent] = await Promise.all([
         walletProvider.readContract({
           address: this.matcherAddress,
           abi: LENDING_MATCHER_ABI,
@@ -2404,10 +2432,37 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
           functionName: "getAccruedInterest",
           args: [oldLoanId],
         }) as Promise<[bigint, bigint]>,
+        walletProvider.readContract({
+          address: this.matcherAddress,
+          abi: LENDING_MATCHER_ABI,
+          functionName: "getMarket",
+          args: [marketId],
+        }) as Promise<any>,
+        walletProvider.readContract({
+          address: this.matcherAddress,
+          abi: LENDING_MATCHER_ABI,
+          functionName: "getOnChainLendIntent",
+          args: [lendHash],
+        }) as Promise<any>,
       ]);
 
       if (oldLoan.repaid) {
         return `Loan #${args.loanId} is already repaid. Use manual_match_credit to open a new credit facility.`;
+      }
+
+      // checkLendIntentCompatibility handles the missing-on-chain case (zero
+      // lender address) and reports a clear error, so we don't need a separate
+      // ZERO_ADDRESS branch here.
+      const incompatibility = this.checkLendIntentCompatibility(lendIntent, {
+        marketId,
+        borrowAmount: BigInt(args.borrowAmount),
+        maxInterestRateBps: BigInt(args.maxInterestRateBps),
+        minLtvBps: BigInt(args.minLtvBps),
+        duration: BigInt(args.duration),
+        market,
+      });
+      if (incompatibility) {
+        return `Cannot renew loan #${args.loanId}: new lend intent ${lendHash} is incompatible (no on-chain actions taken). ${incompatibility}`;
       }
 
       const loanMeta = await resolveTokenMeta(oldLoan.loanToken, walletProvider);
@@ -2436,9 +2491,8 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
       await walletProvider.waitForTransactionReceipt(repayTxHash);
 
       // ── Phase 2: Open new credit facility ─────────────────────────────
+      // `market` and `lendIntent` are already validated and bound from Phase 0.
       const userAddress = (await walletProvider.getAddress()) as Address;
-      const lendHash = args.lendIntentHash as `0x${string}`;
-      const marketId = args.marketId as `0x${string}`;
       const now = BigInt(Math.floor(Date.now() / 1000));
       const expiry = now + 300n; // 5 min expiry for the borrow intent
       const salt = `0x${[...Array(64)].map(() => Math.floor(Math.random() * 16).toString(16)).join("")}` as `0x${string}`;
@@ -2448,34 +2502,6 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
       let matchTxHash: `0x${string}` | undefined;
 
       try {
-        const [market, lendIntent] = await Promise.all([
-          walletProvider.readContract({
-            address: this.matcherAddress,
-            abi: LENDING_MATCHER_ABI,
-            functionName: "getMarket",
-            args: [marketId],
-          }) as Promise<any>,
-          walletProvider.readContract({
-            address: this.matcherAddress,
-            abi: LENDING_MATCHER_ABI,
-            functionName: "getOnChainLendIntent",
-            args: [lendHash],
-          }) as Promise<any>,
-        ]);
-
-        if (lendIntent.lender === "0x0000000000000000000000000000000000000000") {
-          return [
-            `## Credit Line — Partial Renewal\n`,
-            `### Old Loan Repaid`,
-            `- **Repay TX**: ${repayTxHash}`,
-            `- **Loan ID**: ${args.loanId}`,
-            `- **Repay Approval**: ${repayApproval ?? "No approval needed"}`,
-            ``,
-            `### New Credit — FAILED`,
-            `Lend intent ${lendHash} not found on-chain. Use **request_credit** to find a new offer, then **manual_match_credit** to open a new credit facility.`,
-          ].join("\n");
-        }
-
         // Auto-approve collateral
         const parsedCollateral = BigInt(args.collateralAmount);
         const collateralApprovalAmount = (parsedCollateral * 101n) / 100n;
@@ -2603,7 +2629,17 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
       const minLtvBps = BigInt(args.minLtvBps);
       const duration = BigInt(args.duration);
 
-      const available = await this.scanAvailableLendIntents(walletProvider, marketId);
+      // Fetch market once so the compatibility check can correctly determine
+      // whether this is a same-token market (50bps gap) vs two-token (800bps).
+      const [available, market] = await Promise.all([
+        this.scanAvailableLendIntents(walletProvider, marketId),
+        walletProvider.readContract({
+          address: this.matcherAddress,
+          abi: LENDING_MATCHER_ABI,
+          functionName: "getMarket",
+          args: [marketId],
+        }) as Promise<any>,
+      ]);
 
       // Filter with compatibility checks (same rules as manualMatchCredit preflight)
       const compatible = available.filter(
@@ -2614,6 +2650,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
             maxInterestRateBps,
             minLtvBps,
             duration,
+            market,
           }) === null,
       );
 
