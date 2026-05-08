@@ -4,9 +4,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Base Mainnet](https://img.shields.io/badge/Base-Mainnet-0052FF)](https://basescan.org/address/0x17946cD3e180f82e632805e5549EC913330Bb175)
 
-Coinbase AgentKit ActionProvider for the [Floe](https://dev-dashboard.floelabs.xyz) DeFi credit protocol on Base.
+Working capital for AI agents on Base. Deposit USDC, borrow up to 95% — fixed rates, gas-free, no crypto complexity.
 
-Provides **45 actions** for AI agents: DeFi lending, instant credit facilities, flash loan arbitrage, x402 credit delegation, and agent-awareness primitives (credit, spend-limit, thresholds, x402 cost preflight). Works with any framework: Vercel AI SDK, LangChain, OpenAI Agents SDK, or as an MCP server for Claude Desktop / Cursor.
+**3,000+ secured working capital lines issued. Zero defaults.**
+
+Coinbase AgentKit ActionProvider for [Floe](https://dev-dashboard.floelabs.xyz). Provides **45 actions** for AI agents: USDC/USDC credit lines, volatile-collateral lending (WETH, cbBTC), flash loan arbitrage, x402 credit delegation, and agent-awareness primitives (credit, spend-limit, thresholds, x402 cost preflight). Works with any framework: Vercel AI SDK, LangChain, OpenAI Agents SDK, or as an MCP server for Claude Desktop / Cursor.
 
 Also ships a **standalone CLI** (`floe-agent`) for interactive testing without any framework integration.
 
@@ -16,13 +18,20 @@ Also ships a **standalone CLI** (`floe-agent`) for interactive testing without a
 npm install floe-agent @coinbase/agentkit viem zod
 ```
 
+> **Fund with fiat:** Agents (or their operators) can fund wallets with USDC via Coinbase — credit card or bank transfer — directly from the [Floe dashboard](https://dev-dashboard.floelabs.xyz). No crypto on-ramp needed.
+
 ### 5-Second Example
 
 ```typescript
 import { floeActionProvider } from "floe-agent";
 
-// Borrow USDC
-await agent.run("instant_borrow", { borrowAmount: "1000000000", collateralAmount: "500000000000000000", maxInterestRateBps: "800", duration: "1209600" });
+// Deposit 10,000 USDC, borrow 9,500 USDC — same-token market, no price risk
+await agent.run("instant_borrow", {
+  borrowAmount: "9500000000",
+  collateralAmount: "10000000000",
+  maxInterestRateBps: "800",
+  duration: "1209600",
+});
 // Check health
 await agent.run("check_credit_status", { loanId: "42" });
 // Repay
@@ -64,7 +73,7 @@ await agent.run("repay_and_reborrow", { loanId: "42" });
 │  LendingViews          0x9101...5003     <── read actions  │
 │  PriceOracle           0xEA05...10Cc     <── readiness     │
 │  Aerodrome SwapRouter  0xBE6D...18a5     <── flash arb     │
-│  ERC-20 Tokens (WETH, USDC, DAI, ...)   <── approvals     │
+│  ERC-20 Tokens (WETH, USDC, cbBTC, ...) <── approvals     │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -82,8 +91,8 @@ const agentkit = await AgentKit.from({
     floeActionProvider({
       // Optional: defaults to Base Mainnet addresses
       knownMarketIds: [
-        "0x...", // WETH/USDC market
-        // Same-token markets are also supported (e.g. USDC/USDC).
+        "0x...", // USDC/USDC market (primary — working capital)
+        "0x...", // WETH/USDC market (volatile collateral)
       ],
     }),
   ],
@@ -178,7 +187,7 @@ Lets an agent answer "do I have credit?", "is this call worth it?", and "where a
 | `delete_credit_threshold` | Remove a registered threshold |
 | `estimate_x402_cost` | Preflight an x402 URL — returns cost + reflection against your credit (no payment) |
 
-> **Decision-loop pattern:** call `estimate_x402_cost` → check `willExceedAvailable` / `willExceedSpendLimit` → conditionally `x402_fetch`. This is the "answer the 3 rational-agent questions in one round-trip" workflow.
+> **Decision-loop pattern:** call `estimate_x402_cost` -> check `willExceedAvailable` / `willExceedSpendLimit` -> conditionally `x402_fetch`. This is the "answer the 3 rational-agent questions in one round-trip" workflow.
 
 ### Session State
 
