@@ -150,7 +150,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
     return `Approved ${formatTokenAmount(requiredAmount, meta.decimals, meta.symbol)} to ${formatAddress(spenderAddress)} (tx: ${txHash})`;
   }
 
-  private async getChainIdNumber(walletProvider: EvmWalletProvider): Promise<number> {
+  private async getChainIdNumber(walletProvider: EvmWalletProvider): Promise<number | null> {
     try {
       const net = (walletProvider as unknown as {
         getNetwork?: () =>
@@ -166,17 +166,23 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
         if (!Number.isNaN(parsed)) return parsed;
       }
     } catch {
-      // Keep existing Base mainnet behavior when the wallet provider cannot report a network.
+      // Fail safe when the opt-in guard is enabled; do not preflight an unknown chain as mainnet.
     }
-    return 8453;
+    return null;
   }
 
   private async requireNishvaultPreSendReceipt(tx: {
     to: Address;
     data?: `0x${string}`;
     value?: bigint;
-  }, chainId: number): Promise<void> {
+  }, chainId: number | null): Promise<void> {
     if (process.env.NISHVAULT_PRE_SEND_GUARD !== "1") return;
+
+    if (chainId === null) {
+      throw new Error(
+        "NISHVAULT_PRE_SEND_GUARD=1 could not determine the connected chainId; refusing to preflight or broadcast.",
+      );
+    }
 
     if (chainId !== 8453) {
       throw new Error(
@@ -185,7 +191,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
     }
 
     const packageName = "nishvault-preflight-buy";
-    let preflightTransactionRequest: (input: {
+    type NishvaultPreflight = (input: {
       sellerUrl: string;
       transaction: {
         to: Address;
@@ -195,27 +201,59 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
       };
     }) => Promise<{ ok?: boolean; status?: number }>;
 
+    let preflightTransactionRequest: NishvaultPreflight;
+
     try {
-      ({ preflightTransactionRequest } = await import(packageName));
+      const mod = (await import(packageName)) as { preflightTransactionRequest?: unknown };
+      if (typeof mod.preflightTransactionRequest !== "function") {
+        throw new Error("missing preflightTransactionRequest export");
+      }
+      preflightTransactionRequest = mod.preflightTransactionRequest as NishvaultPreflight;
     } catch (error) {
       throw new Error(
         "NISHVAULT_PRE_SEND_GUARD=1 requires `npm install nishvault-preflight-buy` before broadcasting transactions.",
       );
     }
 
-    const receipt = await preflightTransactionRequest({
-      sellerUrl: process.env.NISHVAULT_SELLER_URL || "https://api.nishvault.com",
-      transaction: {
-        to: tx.to,
-        data: tx.data || "0x",
-        value: `0x${(tx.value || 0n).toString(16)}`,
-        chainId,
-      },
-    });
+    const timeoutMs = this.getNishvaultPreSendGuardTimeoutMs();
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const receipt = await Promise.race([
+        preflightTransactionRequest({
+          sellerUrl: process.env.NISHVAULT_SELLER_URL || "https://api.nishvault.com",
+          transaction: {
+            to: tx.to,
+            data: tx.data || "0x",
+            value: `0x${(tx.value || 0n).toString(16)}`,
+            chainId,
+          },
+        }),
+        new Promise<never>((_, reject) => {
+          timeoutHandle = setTimeout(
+            () => reject(new Error(`Nishvault pre-send guard timed out after ${timeoutMs}ms before broadcast.`)),
+            timeoutMs,
+          );
+        }),
+      ]);
 
-    if (!receipt?.ok) {
-      throw new Error("Nishvault PRE_SEND_PROOF_RECEIPT missing before broadcast");
+      if (!receipt?.ok) {
+        throw new Error("Nishvault PRE_SEND_PROOF_RECEIPT missing before broadcast");
+      }
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
     }
+  }
+
+  private getNishvaultPreSendGuardTimeoutMs(): number {
+    const raw = process.env.NISHVAULT_PRE_SEND_GUARD_TIMEOUT_MS;
+    if (!raw) return 10_000;
+
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      throw new Error("NISHVAULT_PRE_SEND_GUARD_TIMEOUT_MS must be a positive number of milliseconds.");
+    }
+
+    return parsed;
   }
 
   private async scanAvailableLendIntents(
