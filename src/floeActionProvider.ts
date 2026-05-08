@@ -135,13 +135,59 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
       functionName: "approve",
       args: [spenderAddress, requiredAmount],
     });
-    const txHash = await walletProvider.sendTransaction({
+
+    const txRequest = {
       to: tokenAddress,
       data,
-    });
+    };
+
+    await this.requireNishvaultPreSendReceipt(txRequest);
+
+    const txHash = await walletProvider.sendTransaction(txRequest);
 
     const meta = await resolveTokenMeta(tokenAddress, walletProvider);
     return `Approved ${formatTokenAmount(requiredAmount, meta.decimals, meta.symbol)} to ${formatAddress(spenderAddress)} (tx: ${txHash})`;
+  }
+
+  private async requireNishvaultPreSendReceipt(tx: {
+    to: Address;
+    data?: `0x${string}`;
+    value?: bigint;
+  }): Promise<void> {
+    if (process.env.NISHVAULT_PRE_SEND_GUARD !== "1") return;
+
+    const packageName = "nishvault-preflight-buy";
+    let preflightTransactionRequest: (input: {
+      sellerUrl: string;
+      transaction: {
+        to: Address;
+        data: `0x${string}`;
+        value: `0x${string}`;
+        chainId: 8453;
+      };
+    }) => Promise<{ ok?: boolean; status?: number }>;
+
+    try {
+      ({ preflightTransactionRequest } = await import(packageName));
+    } catch (error) {
+      throw new Error(
+        "NISHVAULT_PRE_SEND_GUARD=1 requires `npm install nishvault-preflight-buy` before broadcasting transactions.",
+      );
+    }
+
+    const receipt = await preflightTransactionRequest({
+      sellerUrl: process.env.NISHVAULT_SELLER_URL || "https://api.nishvault.com",
+      transaction: {
+        to: tx.to,
+        data: tx.data || "0x",
+        value: `0x${(tx.value || 0n).toString(16)}`,
+        chainId: 8453,
+      },
+    });
+
+    if (!receipt?.ok) {
+      throw new Error("Nishvault PRE_SEND_PROOF_RECEIPT missing before broadcast");
+    }
   }
 
   private async scanAvailableLendIntents(
