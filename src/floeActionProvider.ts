@@ -141,7 +141,8 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
       data,
     };
 
-    await this.requireNishvaultPreSendReceipt(txRequest);
+    const chainId = await this.getChainIdNumber(walletProvider);
+    await this.requireNishvaultPreSendReceipt(txRequest, chainId);
 
     const txHash = await walletProvider.sendTransaction(txRequest);
 
@@ -149,12 +150,39 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
     return `Approved ${formatTokenAmount(requiredAmount, meta.decimals, meta.symbol)} to ${formatAddress(spenderAddress)} (tx: ${txHash})`;
   }
 
+  private async getChainIdNumber(walletProvider: EvmWalletProvider): Promise<number> {
+    try {
+      const net = (walletProvider as unknown as {
+        getNetwork?: () =>
+          | Promise<{ chainId?: number | string | bigint }>
+          | { chainId?: number | string | bigint };
+      }).getNetwork?.();
+      const resolved = net && typeof (net as Promise<unknown>).then === "function" ? await net : net;
+      const id = (resolved as { chainId?: number | string | bigint } | undefined)?.chainId;
+      if (typeof id === "bigint") return Number(id);
+      if (typeof id === "number") return id;
+      if (typeof id === "string") {
+        const parsed = Number(id);
+        if (!Number.isNaN(parsed)) return parsed;
+      }
+    } catch {
+      // Keep existing Base mainnet behavior when the wallet provider cannot report a network.
+    }
+    return 8453;
+  }
+
   private async requireNishvaultPreSendReceipt(tx: {
     to: Address;
     data?: `0x${string}`;
     value?: bigint;
-  }): Promise<void> {
+  }, chainId: number): Promise<void> {
     if (process.env.NISHVAULT_PRE_SEND_GUARD !== "1") return;
+
+    if (chainId !== 8453) {
+      throw new Error(
+        `Nishvault pre-send guard currently supports Base mainnet chainId 8453 only; connected chainId is ${chainId}.`,
+      );
+    }
 
     const packageName = "nishvault-preflight-buy";
     let preflightTransactionRequest: (input: {
@@ -163,7 +191,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
         to: Address;
         data: `0x${string}`;
         value: `0x${string}`;
-        chainId: 8453;
+        chainId: number;
       };
     }) => Promise<{ ok?: boolean; status?: number }>;
 
@@ -181,7 +209,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
         to: tx.to,
         data: tx.data || "0x",
         value: `0x${(tx.value || 0n).toString(16)}`,
-        chainId: 8453,
+        chainId,
       },
     });
 
