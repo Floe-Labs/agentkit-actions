@@ -223,6 +223,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
       maxInterestRateBps: bigint;
       minLtvBps: bigint;
       duration: bigint;
+      market?: { loanToken: Address; collateralToken: Address } | any;
     },
   ): string | null {
     const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
@@ -267,10 +268,19 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
     }
     // Protocol requires a gap between borrower minLtvBps and lender maxLtvBps.
     // Two-token markets: 800 bps. Same-token markets (e.g. USDC/USDC): 50 bps.
+    // LendIntent itself only carries marketId, so we read the token pair off the
+    // market struct passed in by the caller. If it's missing, fall back to the
+    // two-token default — the matcher will revert if we're wrong.
+    const marketLoanToken =
+      typeof params.market?.loanToken === "string" ? (params.market.loanToken as string) : undefined;
+    const marketCollateralToken =
+      typeof params.market?.collateralToken === "string"
+        ? (params.market.collateralToken as string)
+        : undefined;
     const isSameToken =
-      typeof lendIntent.loanToken === "string" &&
-      typeof lendIntent.collateralToken === "string" &&
-      lendIntent.loanToken.toLowerCase() === lendIntent.collateralToken.toLowerCase();
+      !!marketLoanToken &&
+      !!marketCollateralToken &&
+      marketLoanToken.toLowerCase() === marketCollateralToken.toLowerCase();
     const requiredGapBps = isSameToken ? 50n : 800n;
     const requiredMaxLtvBps = params.minLtvBps + requiredGapBps;
     if ((lendIntent.maxLtvBps as bigint) < requiredMaxLtvBps) {
@@ -2087,6 +2097,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
         maxInterestRateBps: BigInt(args.maxInterestRateBps),
         minLtvBps: BigInt(args.minLtvBps),
         duration: BigInt(args.duration),
+        market,
       });
       if (incompatibility) {
         return incompatibility;
@@ -2609,7 +2620,17 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
       const minLtvBps = BigInt(args.minLtvBps);
       const duration = BigInt(args.duration);
 
-      const available = await this.scanAvailableLendIntents(walletProvider, marketId);
+      // Fetch market once so the compatibility check can correctly determine
+      // whether this is a same-token market (50bps gap) vs two-token (800bps).
+      const [available, market] = await Promise.all([
+        this.scanAvailableLendIntents(walletProvider, marketId),
+        walletProvider.readContract({
+          address: this.matcherAddress,
+          abi: LENDING_MATCHER_ABI,
+          functionName: "getMarket",
+          args: [marketId],
+        }) as Promise<any>,
+      ]);
 
       // Filter with compatibility checks (same rules as manualMatchCredit preflight)
       const compatible = available.filter(
@@ -2620,6 +2641,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
             maxInterestRateBps,
             minLtvBps,
             duration,
+            market,
           }) === null,
       );
 
