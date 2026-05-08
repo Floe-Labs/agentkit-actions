@@ -265,10 +265,16 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
     if ((lendIntent.minInterestRateBps as bigint) > params.maxInterestRateBps) {
       return `Requested maxInterestRateBps (${params.maxInterestRateBps}) is below the lend intent's minimum rate (${lendIntent.minInterestRateBps}).`;
     }
-    // Protocol requires 800bps gap between borrower minLtvBps and lender maxLtvBps
-    const requiredMaxLtvBps = params.minLtvBps + 800n;
+    // Protocol requires a gap between borrower minLtvBps and lender maxLtvBps.
+    // Two-token markets: 800 bps. Same-token markets (e.g. USDC/USDC): 50 bps.
+    const isSameToken =
+      typeof lendIntent.loanToken === "string" &&
+      typeof lendIntent.collateralToken === "string" &&
+      lendIntent.loanToken.toLowerCase() === lendIntent.collateralToken.toLowerCase();
+    const requiredGapBps = isSameToken ? 50n : 800n;
+    const requiredMaxLtvBps = params.minLtvBps + requiredGapBps;
     if ((lendIntent.maxLtvBps as bigint) < requiredMaxLtvBps) {
-      return `Requested minLtvBps (${params.minLtvBps}) requires lender maxLtvBps >= ${requiredMaxLtvBps} (800bps buffer), but the lend intent only allows ${lendIntent.maxLtvBps}.`;
+      return `Requested minLtvBps (${params.minLtvBps}) requires lender maxLtvBps >= ${requiredMaxLtvBps} (${requiredGapBps}bps buffer for ${isSameToken ? "same-token" : "two-token"} market), but the lend intent only allows ${lendIntent.maxLtvBps}.`;
     }
     if (params.duration < (lendIntent.minDuration as bigint) || params.duration > (lendIntent.maxDuration as bigint)) {
       return `Requested duration (${params.duration}s) is outside the lend intent's allowed range [${lendIntent.minDuration}, ${lendIntent.maxDuration}]s.`;
@@ -284,7 +290,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
   @CreateAction({
     name: "get_markets",
     description:
-      "Get information about Floe lending markets. Each market represents a unique loan token + collateral token pair with its own interest rate floor, LTV limits, and liquidation incentive. Unlike Aave/Compound pool-based lending, Floe markets are intent-based — lenders and borrowers post offers that get matched at fixed rates and terms.",
+      "Get information about Floe lending markets. Each market is a loan token + collateral token pair (which may be the same token, e.g. USDC/USDC) with its own interest rate floor, LTV limits, and liquidation incentive. Same-token markets allow LTVs up to 99.5% with a 50bps gap; cross-asset markets cap at 95% with an 800bps gap. Unlike Aave/Compound pool-based lending, Floe markets are intent-based — lenders and borrowers post offers that get matched at fixed rates and terms.",
     schema: GetMarketsSchema,
   })
   async getMarkets(

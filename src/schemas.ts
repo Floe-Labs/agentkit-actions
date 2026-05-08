@@ -157,7 +157,7 @@ export const PostBorrowIntentSchema = z.object({
   minLtvBps: z
     .string()
     .describe(
-      "Minimum LTV ratio in basis points for the actual loan (e.g. '5000' = 50%). Must be at least 800 bps (8%) below the lender's maxLtvBps.",
+      "Minimum LTV ratio in basis points for the actual loan (e.g. '5000' = 50%). For two-token markets, must be at least 800 bps (8%) below the lender's maxLtvBps; for same-token markets (e.g. USDC/USDC), the required gap is 50 bps.",
     ),
   minDuration: z
     .string()
