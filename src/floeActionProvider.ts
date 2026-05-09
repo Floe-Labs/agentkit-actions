@@ -208,8 +208,9 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
       const mod = (await import(packageName)) as { preflightTransactionRequest?: unknown };
       preflightTransactionRequest = mod.preflightTransactionRequest as NishvaultPreflight;
     } catch (error) {
+      const reason = error instanceof Error ? ` ${error.message}` : ` ${String(error)}`;
       throw new Error(
-        "NISHVAULT_PRE_SEND_GUARD=1 requires `npm install nishvault-preflight-buy` before broadcasting transactions.",
+        `NISHVAULT_PRE_SEND_GUARD=1 requires \`npm install nishvault-preflight-buy\` before broadcasting transactions.${reason}`,
       );
     }
 
