@@ -207,7 +207,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
     try {
       const mod = (await import(packageName)) as { preflightTransactionRequest?: unknown };
       if (typeof mod.preflightTransactionRequest !== "function") {
-        throw new Error("missing preflightTransactionRequest export");
+        // Missing export is reported after the import error boundary.
       }
       preflightTransactionRequest = mod.preflightTransactionRequest as NishvaultPreflight;
     } catch (error) {
@@ -216,7 +216,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
       );
     }
 
-    const timeoutMs = this.getNishvaultPreSendGuardTimeoutMs();
+    if (typeof preflightTransactionRequest !== "function") {       throw new Error(         "NISHVAULT_PRE_SEND_GUARD=1 requires `nishvault-preflight-buy` to export preflightTransactionRequest.",       );     }      const timeoutMs = this.getNishvaultPreSendGuardTimeoutMs();
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     try {
       const receipt = await Promise.race([
