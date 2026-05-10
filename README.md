@@ -4,13 +4,43 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Base Mainnet](https://img.shields.io/badge/Base-Mainnet-0052FF)](https://basescan.org/address/0x17946cD3e180f82e632805e5549EC913330Bb175)
 
-Working capital for AI agents on Base. Deposit USDC, borrow up to 95% — fixed rates, gas-free, no crypto complexity.
+**The Financial OS for AI Agents — TypeScript SDK.**
 
-**3,000+ secured working capital lines issued. Zero defaults.**
+Wallet, fiat on/off-ramp, working capital, x402 payments, and portable credit. One SDK. Works with Coinbase AgentKit, LangChain, Vercel AI SDK, Claude/Cursor (via MCP), and any framework that speaks HTTP.
 
-Coinbase AgentKit ActionProvider for [Floe](https://dev-dashboard.floelabs.xyz). Provides **45 actions** for AI agents: USDC/USDC credit lines, volatile-collateral lending (WETH, cbBTC), flash loan arbitrage, x402 credit delegation, and agent-awareness primitives (credit, spend-limit, thresholds, x402 cost preflight). Works with any framework: Vercel AI SDK, LangChain, OpenAI Agents SDK, or as an MCP server for Claude Desktop / Cursor.
+`floe-agent` is the official TypeScript SDK — an AgentKit `ActionProvider` exposing 45 actions across the full Floe stack. Python parity ships as [`floe-agentkit-actions`](https://github.com/floe-labs/agentkit-actions-py).
 
-Also ships a **standalone CLI** (`floe-agent`) for interactive testing without any framework integration.
+> **Proof points:** 3,000+ secured working capital lines issued · zero defaults · 13,000+ x402 APIs reachable via the Floe proxy.
+
+---
+
+## The Floe Stack (what this SDK covers)
+
+| # | Component | Status | Backed by |
+|---|---|---|---|
+| 01 | **Agent Wallet** | `GA` | Any `WalletProvider` (CDP, Privy, Viem, Smart Wallet) + ERC-8004 identity |
+| 02 | **Fiat on-ramp** | `GA` (dashboard-driven) | Coinbase onramp via the [Floe dashboard](https://dev-dashboard.floelabs.xyz). Fiat off-ramp `Preview`. |
+| 03 | **Secured working capital** | `GA` | `instant_borrow`, `repay_and_reborrow`, `check_credit_status`, `request_credit`, `manual_match_credit` + 15 lending primitives |
+| 04 | **Unsecured working capital** | `Preview` | Receivables + chain-of-thought underwriting — [join the waitlist](https://floelabs.xyz/unsecured) |
+| 05 | **x402 payment facilitator** | `GA` | `grant_credit_delegation`, `revoke_credit_delegation`, `check_credit_delegation`, `x402_fetch`, `x402_get_balance`, `x402_get_transactions` |
+| 06 | **Credit & trust bureau** | Reader `Beta` · Writer `Preview` | `list_credit_thresholds`, `register_credit_threshold`, `delete_credit_threshold` today. Portable ERC-8004 read API in Beta. |
+
+---
+
+## Framework support
+
+| Framework | Status | How |
+|---|---|---|
+| Coinbase AgentKit | `GA` | Native — `floeActionProvider()` |
+| LangChain | `GA` | Via `getLangChainTools(agentkit)` from `@coinbase/agentkit-langchain` |
+| Vercel AI SDK | `GA` | Via `getVercelAITools(agentkit)` from `@coinbase/agentkit-vercel-ai-sdk` |
+| Claude Desktop / Claude Code / Cursor | `GA` | Via [floe-mcp-server](https://github.com/Floe-Labs/floe-mcp-server) |
+| CrewAI | `Beta` | Via MCP server |
+| OpenAI Agents SDK | `Preview` | Native adapter on the way; MCP fallback today |
+| ElizaOS | `Preview` | MCP fallback today |
+| Plain HTTP / REST | `GA` | Any framework — call the [REST API](https://floe-labs.gitbook.io/docs/developers/credit-api) |
+
+---
 
 ## Installation
 
@@ -18,27 +48,43 @@ Also ships a **standalone CLI** (`floe-agent`) for interactive testing without a
 npm install floe-agent @coinbase/agentkit viem zod
 ```
 
-> **Fund with fiat:** Agents (or their operators) can fund wallets with USDC via Coinbase — credit card or bank transfer — directly from the [Floe dashboard](https://dev-dashboard.floelabs.xyz). No crypto on-ramp needed.
+> **Fund with fiat:** Agents (or their operators) can fund wallets with USDC via Coinbase — credit card, bank transfer, Apple Pay, Google Pay — directly from the [Floe dashboard](https://dev-dashboard.floelabs.xyz). No crypto on-ramp needed.
 
-### 5-Second Example
+### 30-second example
 
 ```typescript
+import { AgentKit } from "@coinbase/agentkit";
 import { floeActionProvider } from "floe-agent";
 
-// Deposit 10,000 USDC, borrow 9,500 USDC — same-token market, no price risk
-await agent.run("instant_borrow", {
+const agentkit = await AgentKit.from({
+  walletProvider,
+  actionProviders: [floeActionProvider()],
+});
+
+// Borrow against on-chain collateral
+await agentkit.run("instant_borrow", {
   borrowAmount: "9500000000",
   collateralAmount: "10000000000",
   maxInterestRateBps: "800",
   duration: "1209600",
 });
-// Check health
-await agent.run("check_credit_status", { loanId: "42" });
-// Repay
-await agent.run("repay_credit", { loanId: "42" });
-// Rollover
-await agent.run("repay_and_reborrow", { loanId: "42" });
+
+// Pay any x402 API through the Floe facilitator
+await agentkit.run("x402_fetch", {
+  url: "https://api.example.com/premium",
+  method: "POST",
+  body: { prompt: "..." },
+});
+
+// Check health, then repay
+await agentkit.run("check_credit_status", { loanId: "42" });
+await agentkit.run("repay_loan", { loanId: "42" });
+
+// Or roll the position
+await agentkit.run("repay_and_reborrow", { loanId: "42" });
 ```
+
+---
 
 ## Architecture
 
@@ -72,12 +118,15 @@ await agent.run("repay_and_reborrow", { loanId: "42" });
 │  LendingIntentMatcher  0x17946...Bb175   <── write actions │
 │  LendingViews          0x9101...5003     <── read actions  │
 │  PriceOracle           0xEA05...10Cc     <── readiness     │
+│  x402 Facilitator      0x58ED...31f1     <── x402 payments │
 │  Aerodrome SwapRouter  0xBE6D...18a5     <── flash arb     │
 │  ERC-20 Tokens (WETH, USDC, cbBTC, ...) <── approvals     │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Flow:** User speaks to LLM -> LLM picks a Floe tool -> AgentKit calls FloeActionProvider -> provider uses WalletProvider to read chain / sign txs -> transaction hits Floe contracts on Base.
+**Flow:** User speaks to LLM → LLM picks a Floe tool → AgentKit calls `FloeActionProvider` → provider uses `WalletProvider` to read chain / sign txs → transaction hits Floe contracts on Base.
+
+---
 
 ## Quick Start
 
@@ -98,6 +147,8 @@ const agentkit = await AgentKit.from({
   ],
 });
 ```
+
+---
 
 ## Actions (45 total: 30 lending + 6 x402 + 9 agent-awareness)
 
@@ -121,7 +172,7 @@ const agentkit = await AgentKit.from({
 | `post_lend_intent` | Post a fixed-rate lending offer (auto-approves loan token) |
 | `post_borrow_intent` | Post a borrow request with collateral (auto-approves collateral) |
 | `match_intents` | Match a lend + borrow intent to create a loan |
-| `repay_loan` | Repay a loan fully or partially (with slippage protection) |
+| `repay_loan` | Repay a loan fully or partially (with slippage protection). Collateral auto-returns in the same tx. |
 | `add_collateral` | Add collateral to improve loan health |
 | `withdraw_collateral` | Withdraw excess collateral (enforces safety buffer) |
 | `liquidate_loan` | Liquidate an unhealthy loan (currentLTV >= threshold or overdue) |
@@ -187,7 +238,7 @@ Lets an agent answer "do I have credit?", "is this call worth it?", and "where a
 | `delete_credit_threshold` | Remove a registered threshold |
 | `estimate_x402_cost` | Preflight an x402 URL — returns cost + reflection against your credit (no payment) |
 
-> **Decision-loop pattern:** call `estimate_x402_cost` -> check `willExceedAvailable` / `willExceedSpendLimit` -> conditionally `x402_fetch`. This is the "answer the 3 rational-agent questions in one round-trip" workflow.
+> **Decision-loop pattern:** call `estimate_x402_cost` → check `willExceedAvailable` / `willExceedSpendLimit` → conditionally `x402_fetch`. This is the "answer the 3 rational-agent questions in one round-trip" workflow.
 
 ### Session State
 
@@ -204,6 +255,8 @@ When you deploy via `deploy_flash_arb_receiver`, the contract address is stored 
 ```
 
 Pre-flight checks on deploy: flash loan fee readable, WETH liquidity > 0, circuit breaker not active, SwapRouter has code.
+
+---
 
 ## Framework Integrations
 
@@ -240,56 +293,26 @@ const tools = await getLangChainTools(agentkit);
 // Pass tools to a LangChain agent
 ```
 
-### MCP Server (Claude Desktop / Cursor)
+### MCP (Claude Desktop / Claude Code / Cursor)
 
-Expose all 45 Floe actions as MCP tools using the AgentKit MCP extension:
-
-```bash
-npm install @coinbase/agentkit-model-context-protocol @modelcontextprotocol/sdk
-```
-
-```typescript
-import { AgentKit } from "@coinbase/agentkit";
-import { getMcpTools } from "@coinbase/agentkit-model-context-protocol";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { floeActionProvider } from "floe-agent";
-
-const agentkit = await AgentKit.from({
-  walletProvider,
-  actionProviders: [floeActionProvider()],
-});
-
-const mcpTools = await getMcpTools(agentkit);
-const server = new McpServer({ name: "floe-lending", version: "1.0.0" });
-
-// Register tools and connect
-const transport = new StdioServerTransport();
-await server.connect(transport);
-```
-
-Configure in Claude Desktop (`claude_desktop_config.json`):
+Zero-install via the hosted Floe MCP endpoint:
 
 ```json
 {
   "mcpServers": {
-    "floe-lending": {
-      "command": "node",
-      "args": ["path/to/floe-mcp-server.js"],
-      "env": {
-        "PRIVATE_KEY": "0x...",
-        "BASE_RPC_URL": "https://mainnet.base.org"
-      }
+    "floe": {
+      "url": "https://mcp.floelabs.xyz/mcp",
+      "transport": "streamable-http"
     }
   }
 }
 ```
 
-This exposes all 45 actions as tools in Claude Desktop, Cursor, or any MCP-compatible client.
+Or run a local MCP server that wraps this SDK — see [floe-mcp-server](https://github.com/Floe-Labs/floe-mcp-server).
 
-### OpenAI Agents SDK
+### OpenAI Agents SDK (Preview)
 
-AgentKit provides launch-day integration with OpenAI's Agents SDK. Use the `create-onchain-agent` scaffold:
+A native OpenAI Agents adapter is on the roadmap. Today, use the MCP server endpoint or the AgentKit `create-onchain-agent` scaffold:
 
 ```bash
 npx create-onchain-agent@latest
@@ -297,6 +320,8 @@ npx create-onchain-agent@latest
 ```
 
 Then register `floeActionProvider()` alongside the built-in action providers.
+
+---
 
 ## CLI: `floe-agent`
 
@@ -354,20 +379,22 @@ Configuration is saved to `.floe-agent.json` in the working directory and reused
 
 ```
 You: Check flash arb readiness
-  -> Shows fee, WETH liquidity, circuit breaker, SwapRouter status
+  → Shows fee, WETH liquidity, circuit breaker, SwapRouter status
 
 You: Deploy a FlashArbReceiver for me
-  -> Pre-flight checks, deploys contract, stores address in session
+  → Pre-flight checks, deploys contract, stores address in session
 
 You: Verify my FlashArbReceiver
-  -> Validates owner/LENDING_PROTOCOL/SWAP_ROUTER (no address needed)
+  → Validates owner/LENDING_PROTOCOL/SWAP_ROUTER (no address needed)
 
 You: Check the WETH balance in my FlashArbReceiver
-  -> Shows 0 WETH (auto-uses session address)
+  → Shows 0 WETH (auto-uses session address)
 
 You: Execute a flash arb: borrow 0.01 WETH, swap WETH -> USDC tick spacing 100, then USDC -> WETH tick spacing 100, min profit 0
-  -> Submits the flash arb transaction
+  → Submits the flash arb transaction
 ```
+
+---
 
 ## Wallet Providers
 
@@ -379,6 +406,8 @@ You: Execute a flash arb: borrow 0.01 WETH, swap WETH -> USDC tick spacing 100, 
 | `PrivyWalletProvider` | **Embedded wallets** | Privy delegated/embedded wallets | Privy app credentials |
 
 > **Note on Coinbase Agentic Wallet:** Coinbase's [Agentic Wallet](https://docs.cdp.coinbase.com/agentic-wallet/docs/welcome) (CLI/MPC-based, send/trade only) is a **different product** and is NOT compatible with AgentKit ActionProviders. Floe actions require a full `WalletProvider` that can sign arbitrary contract calls — use one of the providers above.
+
+---
 
 ## Configuration
 
@@ -393,6 +422,8 @@ floeActionProvider({
 });
 ```
 
+---
+
 ## Networks
 
 - **Base Mainnet** (8453) — production
@@ -405,13 +436,16 @@ floeActionProvider({
 | LendingIntentMatcher | `0x17946cD3e180f82e632805e5549EC913330Bb175` |
 | LendingViews | `0x9101027166bE205105a9E0c68d6F14f21f6c5003` |
 | PriceOracle | `0xEA058a06b54dce078567f9aa4dBBE82a100210Cc` |
+| x402 Facilitator | `0x58EDdE022FFDAD3Fb0Fb0E7D51eb05AaF66a31f1` |
 | Aerodrome SwapRouter | `0xBE6D8f0d05cC4be24d5167a3eF062215bE6D18a5` |
 | Aerodrome QuoterV2 | `0x254cF9E1E6e233aa1AC962CB9B05b2cFeAAe15b0` |
 | WETH | `0x4200000000000000000000000000000000000006` |
 
+---
+
 ## Examples
 
-See the [`examples/`](./examples) directory for runnable scripts:
+See the [`examples/`](./examples) directory for runnable scripts, and [floe-examples](https://github.com/Floe-Labs/floe-examples) for end-to-end multi-framework agents — including the canonical `financial-os-loop` example that wires every GA component in one flow.
 
 ### Chatbot (Vercel AI SDK + CdpWalletProvider)
 
@@ -421,29 +455,6 @@ Full conversational agent on Base Mainnet with production MPC-managed keys:
 cd examples
 cp .env.example .env  # fill in CDP_API_KEY_NAME, CDP_API_KEY_PRIVATE_KEY, OPENAI_API_KEY
 npx tsx chatbot.ts
-```
-
-```typescript
-import { AgentKit, CdpWalletProvider } from "@coinbase/agentkit";
-import { tool } from "ai";
-import { floeActionProvider } from "floe-agent";
-
-const walletProvider = await CdpWalletProvider.configureWithWallet({
-  apiKeyName: process.env.CDP_API_KEY_NAME,
-  apiKeyPrivateKey: process.env.CDP_API_KEY_PRIVATE_KEY,
-  networkId: "base-mainnet",
-});
-
-const agentkit = await AgentKit.from({
-  walletProvider,
-  actionProviders: [floeActionProvider()], // defaults to Base Mainnet
-});
-
-// Convert AgentKit actions -> Vercel AI SDK tools
-const actions = agentkit.getActions();
-const tools = Object.fromEntries(
-  actions.map((a) => [a.name, tool({ description: a.description, parameters: a.schema, execute: (args) => a.invoke(args) })])
-);
 ```
 
 ### Standalone (No AI Framework)
@@ -464,6 +475,8 @@ const floe = new FloeActionProvider(); // defaults to Base Mainnet
 const result = await floe.getMyLoans(walletProvider, {});
 console.log(result);
 ```
+
+---
 
 ## Local Development & Testing
 
@@ -502,10 +515,10 @@ Then `npm install`. Simple but doesn't simulate a real publish.
 # In agentkit-actions/
 npm run build
 npm pack
-# Creates floe-agentkit-actions-0.1.0.tgz
+# Creates floe-agent-0.3.0.tgz
 
 # In your consumer project
-npm install ../agentkit-actions/floe-agentkit-actions-0.1.0.tgz
+npm install ../agentkit-actions/floe-agent-0.3.0.tgz
 ```
 
 This is the safest way to validate what consumers will actually get. Verify contents first:
@@ -514,6 +527,8 @@ This is the safest way to validate what consumers will actually get. Verify cont
 npm pack --dry-run
 # Should only include: dist/, README.md, package.json
 ```
+
+---
 
 ## Updating FlashArbReceiver Bytecode
 
@@ -532,12 +547,14 @@ cd agentkit-actions
 npm run build
 ```
 
+---
+
 ## Project Structure
 
 ```
 src/
   index.ts                 # Package entry point, exports both providers
-  floeActionProvider.ts    # 23 lending actions (FloeActionProvider)
+  floeActionProvider.ts    # 30 lending actions (FloeActionProvider)
   x402ActionProvider.ts    # 15 actions (6 x402 credit delegation + 9 agent-awareness)
   schemas.ts               # Zod schemas for lending action inputs
   constants.ts             # Contract addresses, ABIs, known tokens
@@ -558,13 +575,15 @@ examples/
   .env.example             # Environment variable template
 ```
 
+---
 
 ## Links
 
-- [Website](https://dev-dashboard.floelabs.xyz)
+- [Website](https://floelabs.xyz)
 - [Documentation](https://floe-labs.gitbook.io/docs)
-- [Python counterpart (floe-agentkit-actions)](https://github.com/floelabs/agentkit-actions-py)
-- [MCP Server (@floelabs/mcp-server)](https://github.com/floelabs/floe-mcp-server)
+- [Python counterpart (`floe-agentkit-actions`)](https://github.com/Floe-Labs/agentkit-actions-py)
+- [MCP server (`@floelabs/mcp-server`)](https://github.com/Floe-Labs/floe-mcp-server)
+- [End-to-end examples](https://github.com/Floe-Labs/floe-examples)
 
 ## License
 
