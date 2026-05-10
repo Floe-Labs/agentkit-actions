@@ -8,7 +8,12 @@
 
 Wallet, fiat on/off-ramp, working capital, x402 payments, and portable credit. One SDK. Works with Coinbase AgentKit, LangChain, Vercel AI SDK, Claude/Cursor (via MCP), and any framework that speaks HTTP.
 
-`floe-agent` is the official TypeScript SDK — an AgentKit `ActionProvider` exposing 45 actions across the full Floe stack. Python parity ships as [`floe-agentkit-actions`](https://github.com/floe-labs/agentkit-actions-py).
+`floe-agent` is the official TypeScript SDK and ships **two AgentKit `ActionProvider`s** that together expose 45 actions across the full Floe stack:
+
+- **`floeActionProvider()`** — 30 lending actions (markets, intents, loans, collateral, flash loans, credit-facility helpers)
+- **`x402ActionProvider()`** — 15 actions (6 x402 credit-delegation + 9 agent-awareness)
+
+Register **both** in `actionProviders: [...]` if you want the full 45-action surface. Python parity ships as [`floe-agentkit-actions`](https://github.com/floe-labs/agentkit-actions-py).
 
 > **Proof points:** 3,000+ secured working capital lines issued · zero defaults · 13,000+ x402 APIs reachable via the Floe proxy.
 
@@ -20,10 +25,10 @@ Wallet, fiat on/off-ramp, working capital, x402 payments, and portable credit. O
 |---|---|---|---|
 | 01 | **Agent Wallet** | `GA` | Any `WalletProvider` (CDP, Privy, Viem, Smart Wallet) + ERC-8004 identity |
 | 02 | **Fiat on-ramp** | `GA` (dashboard-driven) | Coinbase onramp via the [Floe dashboard](https://dev-dashboard.floelabs.xyz). Fiat off-ramp `Preview`. |
-| 03 | **Secured working capital** | `GA` | `instant_borrow`, `repay_and_reborrow`, `check_credit_status`, `request_credit`, `manual_match_credit` + 15 lending primitives |
+| 03 | **Secured working capital** | `GA` | `instant_borrow`, `repay_and_reborrow`, `check_credit_status`, `request_credit`, `manual_match_credit` + 15 lending primitives (in `floeActionProvider`) |
 | 04 | **Unsecured working capital** | `Preview` | Receivables + chain-of-thought underwriting — email [hello@floelabs.xyz](mailto:hello@floelabs.xyz) for the design partner program |
-| 05 | **x402 payment facilitator** | `GA` | `grant_credit_delegation`, `revoke_credit_delegation`, `check_credit_delegation`, `x402_fetch`, `x402_get_balance`, `x402_get_transactions` |
-| 06 | **Credit & trust bureau** | Reader `Beta` · Writer `Preview` | `list_credit_thresholds`, `register_credit_threshold`, `delete_credit_threshold` today. Portable ERC-8004 read API in Beta. |
+| 05 | **x402 payment facilitator** | `GA` | `grant_credit_delegation`, `revoke_credit_delegation`, `check_credit_delegation`, `x402_fetch`, `x402_get_balance`, `x402_get_transactions` (in `x402ActionProvider`) |
+| 06 | **Credit & trust bureau** | Reader `Beta` · Writer `Preview` | `list_credit_thresholds`, `register_credit_threshold`, `delete_credit_threshold` today (in `x402ActionProvider`). Portable ERC-8004 read API in Beta. |
 
 ---
 
@@ -31,7 +36,7 @@ Wallet, fiat on/off-ramp, working capital, x402 payments, and portable credit. O
 
 | Framework | Status | How |
 |---|---|---|
-| Coinbase AgentKit | `GA` | Native — `floeActionProvider()` |
+| Coinbase AgentKit | `GA` | Native — `floeActionProvider()` + `x402ActionProvider()` |
 | LangChain | `GA` | Via `getLangChainTools(agentkit)` from `@coinbase/agentkit-langchain` |
 | Vercel AI SDK | `GA` | Via `getVercelAITools(agentkit)` from `@coinbase/agentkit-vercel-ai-sdk` |
 | Claude Desktop / Claude Code / Cursor | `GA` | Via [floe-mcp-server](https://github.com/Floe-Labs/floe-mcp-server) |
@@ -54,31 +59,42 @@ npm install floe-agent @coinbase/agentkit viem zod
 
 ```typescript
 import { AgentKit } from "@coinbase/agentkit";
-import { floeActionProvider } from "floe-agent";
+import { floeActionProvider, x402ActionProvider } from "floe-agent";
 
 const agentkit = await AgentKit.from({
   walletProvider,
-  actionProviders: [floeActionProvider()],
+  // Register BOTH providers to expose all 45 actions.
+  actionProviders: [
+    floeActionProvider(),
+    x402ActionProvider({ facilitatorApiKey: process.env.FLOE_FACILITATOR_API_KEY }),
+  ],
 });
 
-// Borrow against on-chain collateral
+// Borrow against on-chain collateral. `marketId` is required — fetch it via
+// `get_markets` (see the action reference below) or hard-code a known one.
 await agentkit.run("instant_borrow", {
+  marketId: "0x...",                // bytes32 market id
   borrowAmount: "9500000000",
   collateralAmount: "10000000000",
   maxInterestRateBps: "800",
   duration: "1209600",
 });
 
-// Pay any x402 API through the Floe facilitator
+// Pay any x402 API through the Floe facilitator (provided by x402ActionProvider)
 await agentkit.run("x402_fetch", {
   url: "https://api.example.com/premium",
   method: "POST",
   body: { prompt: "..." },
 });
 
-// Check health, then repay
+// Check health, then repay. `repay_loan` requires `repayAmount` (raw units of
+// principal) per the schema; `slippageBps` is optional (defaults to 5%).
 await agentkit.run("check_credit_status", { loanId: "42" });
-await agentkit.run("repay_loan", { loanId: "42" });
+await agentkit.run("repay_loan", {
+  loanId: "42",
+  repayAmount: "9500000000",
+  slippageBps: "500",
+});
 
 // Or roll the position
 await agentkit.run("repay_and_reborrow", { loanId: "42" });
@@ -89,42 +105,34 @@ await agentkit.run("repay_and_reborrow", { loanId: "42" });
 ## Architecture
 
 ```
-┌────────────────────────────────────────────────────────┐
-│                   Agent Developer's App                      │
-│                                                             │
-│  ┌─────────────┐    ┌──────────┐    ┌────────────────────┐ │
-│  │     LLM     │───>│ AgentKit │───>│ FloeActionProvider │ │
-│  │ (GPT/Claude)│    │          │    │   (45 actions)      │ │
-│  └─────────────┘    └────┬─────┘    └────────┬───────────┘ │
-│                          │                   │             │
-│                          v                   │             │
-│                  ┌──────────────┐             │             │
-│                  │WalletProvider│<────────────┘             │
-│                  └──────┬───────┘  signs & sends txs       │
-│                         │                                   │
-│  ┌──────────────────────┼──────────────────────────────┐   │
-│  │ Choose one:          │                              │   │
-│  │ - CdpV2WalletProvider│ (prod — MPC server wallet)   │   │
-│  │ - CdpSmartWallet     │ (AA — gasless on Base)       │   │
-│  │ - ViemWalletProvider │ (dev — raw private key)      │   │
-│  │ - PrivyWalletProvider│ (embedded/delegated wallets) │   │
-│  └──────────────────────┼──────────────────────────────┘   │
-└─────────────────────────┼──────────────────────────────────────┘
-                          │ RPC calls + signed transactions
-                          v
-┌────────────────────────────────────────────────────────┐
-│                    Base Mainnet (8453)                       │
-│                                                             │
-│  LendingIntentMatcher  0x17946...Bb175   <── write actions │
-│  LendingViews          0x9101...5003     <── read actions  │
-│  PriceOracle           0xEA05...10Cc     <── readiness     │
-│  x402 Facilitator      0x58ED...31f1     <── x402 payments │
-│  Aerodrome SwapRouter  0xBE6D...18a5     <── flash arb     │
-│  ERC-20 Tokens (WETH, USDC, cbBTC, ...) <── approvals     │
-└────────────────────────────────────────────────────────┘
+Your app
+  └─ AgentKit (45 actions exposed when both providers are registered)
+        ├─ floeActionProvider()   → 30 lending actions
+        │                          (markets, intents, loans, collateral,
+        │                           flash loans, credit-facility helpers)
+        └─ x402ActionProvider()   → 15 actions
+                                   (6 x402 credit delegation +
+                                    9 agent-awareness primitives)
+              │
+              │ each provider uses your WalletProvider to read chain
+              │ and sign transactions:
+              │
+              ├─ CdpV2WalletProvider     (production — MPC server wallet)
+              ├─ CdpSmartWalletProvider  (gasless on Base via AA)
+              ├─ ViemWalletProvider      (dev / scripting — raw private key)
+              └─ PrivyWalletProvider     (embedded / delegated wallets)
+                    │
+                    ▼  RPC calls + signed transactions
+              Base Mainnet (8453)
+                ├─ LendingIntentMatcher  0x17946...Bb175   write actions
+                ├─ LendingViews          0x9101...5003     read actions
+                ├─ PriceOracle           0xEA05...10Cc     readiness
+                ├─ x402 Facilitator      0x58ED...31f1     x402 payments
+                ├─ Aerodrome SwapRouter  0xBE6D...18a5     flash arb
+                └─ ERC-20 Tokens (WETH, USDC, USDT, cbBTC, ...)
 ```
 
-**Flow:** User speaks to LLM → LLM picks a Floe tool → AgentKit calls `FloeActionProvider` → provider uses `WalletProvider` to read chain / sign txs → transaction hits Floe contracts on Base.
+**Flow:** User speaks to LLM → LLM picks a Floe tool → AgentKit dispatches to either `FloeActionProvider` (lending) or `X402ActionProvider` (x402 + agent-awareness) → the matching provider uses `WalletProvider` to read chain / sign txs → transaction hits Floe contracts on Base.
 
 ---
 
@@ -132,7 +140,7 @@ await agentkit.run("repay_and_reborrow", { loanId: "42" });
 
 ```typescript
 import { AgentKit } from "@coinbase/agentkit";
-import { floeActionProvider } from "floe-agent";
+import { floeActionProvider, x402ActionProvider } from "floe-agent";
 
 const agentkit = await AgentKit.from({
   walletProvider: myWalletProvider,
@@ -144,19 +152,26 @@ const agentkit = await AgentKit.from({
         "0x...", // WETH/USDC market (volatile collateral)
       ],
     }),
+    x402ActionProvider({
+      facilitatorApiKey: process.env.FLOE_FACILITATOR_API_KEY, // required for x402 + agent-awareness
+    }),
   ],
 });
 ```
 
+> **Skip `x402ActionProvider` only if your agent never makes x402 payments and never queries credit / spend-limit / threshold state.** You will lose 15 actions including `x402_fetch`, `estimate_x402_cost`, `get_credit_remaining`, `set_spend_limit`, and `register_credit_threshold`.
+
 ---
 
-## Actions (45 total: 30 lending + 6 x402 + 9 agent-awareness)
+## Actions (45 total)
 
-### Read Actions (8)
+**Provider split:** `floeActionProvider` exposes 30 lending actions (everything in this section through *Credit Facility Actions*). `x402ActionProvider` exposes 15 actions (*x402 Credit Delegation* + *Agent Awareness*). Register both for the full surface.
+
+### Read Actions (8) — `floeActionProvider`
 
 | Action | Description |
 |--------|-------------|
-| `get_markets` | Get info about Floe lending markets (rates, LTV bounds, pause status) |
+| `get_markets` | Get info about Floe lending markets (rates, LTV bounds, pause status). **Use this to obtain `marketId` for `instant_borrow` and friends.** |
 | `get_loan` | Get detailed loan information (participants, health, time remaining) |
 | `get_my_loans` | Get all loans for the connected wallet (as lender or borrower) |
 | `check_loan_health` | Check loan health — current LTV vs liquidation threshold, buffer % |
@@ -165,21 +180,21 @@ const agentkit = await AgentKit.from({
 | `get_liquidation_quote` | Get profit/loss breakdown for liquidating an unhealthy loan |
 | `get_intent_book` | Look up an on-chain lend or borrow intent by hash |
 
-### Write Actions (7)
+### Write Actions (7) — `floeActionProvider`
 
 | Action | Description |
 |--------|-------------|
 | `post_lend_intent` | Post a fixed-rate lending offer (auto-approves loan token) |
 | `post_borrow_intent` | Post a borrow request with collateral (auto-approves collateral) |
 | `match_intents` | Match a lend + borrow intent to create a loan |
-| `repay_loan` | Repay a loan fully or partially (with slippage protection). Collateral auto-returns in the same tx. |
+| `repay_loan` | Repay a loan fully or partially. **Required:** `loanId`, `repayAmount` (raw principal units). **Optional:** `slippageBps` (default 5%). Collateral auto-returns in the same tx. |
 | `add_collateral` | Add collateral to improve loan health |
 | `withdraw_collateral` | Withdraw excess collateral (enforces safety buffer) |
 | `liquidate_loan` | Liquidate an unhealthy loan (currentLTV >= threshold or overdue) |
 
 All write actions **auto-approve** tokens to the LendingIntentMatcher with a 1% buffer before submitting. Repay and liquidate actions include configurable slippage protection (default 5%).
 
-### Flash Loan Actions (5)
+### Flash Loan Actions (5) — `floeActionProvider`
 
 | Action | Description |
 |--------|-------------|
@@ -191,11 +206,11 @@ All write actions **auto-approve** tokens to the LendingIntentMatcher with a 1% 
 
 > **`flash_loan` vs `flash_arb`:** `flash_loan` sends tokens to `msg.sender` and calls `receiveFlashLoan()` — your connected wallet must be a smart contract. EOA wallets will revert. Use `flash_arb` instead, which routes through a pre-deployed FlashArbReceiver contract that handles repayment automatically.
 
-### Credit Facility Actions (5)
+### Credit Facility Actions (5) — `floeActionProvider`
 
 | Action | Description |
 |--------|-------------|
-| `instant_borrow` | Borrow USDC instantly — auto-selects best lender, handles approval + register + match in one call |
+| `instant_borrow` | Borrow USDC instantly. **Required:** `marketId` (bytes32; obtain via `get_markets`), `borrowAmount`, `collateralAmount`, `maxInterestRateBps`, `duration`. Auto-selects best lender, handles approval + register + match in one call. |
 | `repay_and_reborrow` | Repay an existing loan and instantly borrow again. If reborrow fails, repayment still succeeds |
 | `check_credit_status` | Loan health, balance, accrued interest, time to expiry, early repayment terms |
 | `request_credit` | Browse available credit offers — rates, amounts, durations |
@@ -203,7 +218,7 @@ All write actions **auto-approve** tokens to the LendingIntentMatcher with a 1% 
 
 > **`instant_borrow` vs `manual_match_credit`:** Use `instant_borrow` for one-call capital. Use `request_credit` + `manual_match_credit` if you want to pick a specific lender.
 
-### Deploy / Verify / Readiness Actions (3)
+### Deploy / Verify / Readiness Actions (3) — `floeActionProvider`
 
 | Action | Description |
 |--------|-------------|
@@ -211,7 +226,7 @@ All write actions **auto-approve** tokens to the LendingIntentMatcher with a 1% 
 | `check_flash_arb_readiness` | Check environment readiness (fee, liquidity, oracle, router) |
 | `verify_flash_arb_receiver` | Verify a receiver's owner and immutable config |
 
-### x402 Credit Delegation Actions (6)
+### x402 Credit Delegation Actions (6) — `x402ActionProvider`
 
 | Action | Description |
 |--------|-------------|
@@ -222,9 +237,9 @@ All write actions **auto-approve** tokens to the LendingIntentMatcher with a 1% 
 | `x402_get_balance` | Check x402 credit balance |
 | `x402_get_transactions` | List recent x402 payment transactions |
 
-### Agent Awareness Actions (9)
+### Agent Awareness Actions (9) — `x402ActionProvider`
 
-Lets an agent answer "do I have credit?", "is this call worth it?", and "where am I in the loan lifecycle?" before committing capital. All require `facilitatorApiKey` to be configured on the provider.
+Lets an agent answer "do I have credit?", "is this call worth it?", and "where am I in the loan lifecycle?" before committing capital. All require `facilitatorApiKey` to be configured on `x402ActionProvider`.
 
 | Action | Description |
 |--------|-------------|
@@ -267,11 +282,14 @@ import { AgentKit } from "@coinbase/agentkit";
 import { getVercelAITools } from "@coinbase/agentkit-vercel-ai-sdk";
 import { generateText } from "ai";
 import { openai } from "@ai-sdk/openai";
-import { floeActionProvider } from "floe-agent";
+import { floeActionProvider, x402ActionProvider } from "floe-agent";
 
 const agentkit = await AgentKit.from({
   walletProvider,
-  actionProviders: [floeActionProvider()],
+  actionProviders: [
+    floeActionProvider(),
+    x402ActionProvider({ facilitatorApiKey: process.env.FLOE_FACILITATOR_API_KEY }),
+  ],
 });
 
 const tools = await getVercelAITools(agentkit);
@@ -319,13 +337,13 @@ npx create-onchain-agent@latest
 # Select "OpenAI Agents SDK" as framework
 ```
 
-Then register `floeActionProvider()` alongside the built-in action providers.
+Then register `floeActionProvider()` and `x402ActionProvider()` alongside the built-in action providers.
 
 ---
 
 ## CLI: `floe-agent`
 
-Interactive conversational agent for testing all 45 actions without writing any framework code.
+Interactive conversational agent for testing all 45 actions without writing any framework code. Both providers are registered automatically.
 
 ### Run directly
 
@@ -374,6 +392,7 @@ Configuration is saved to `.floe-agent.json` in the working directory and reused
 | `OPENAI_API_KEY` | OpenAI API key |
 | `ANTHROPIC_API_KEY` | Anthropic API key |
 | `BASE_RPC_URL` | Custom Base Mainnet RPC URL |
+| `FLOE_FACILITATOR_API_KEY` | Required for x402 + agent-awareness actions |
 
 ### Example session
 
@@ -419,6 +438,11 @@ floeActionProvider({
 
   // Pre-configured market IDs for get_markets without arguments
   knownMarketIds: ["0x..."],
+});
+
+x402ActionProvider({
+  // Required for x402 + agent-awareness actions
+  facilitatorApiKey: process.env.FLOE_FACILITATOR_API_KEY,
 });
 ```
 
@@ -556,7 +580,7 @@ src/
   index.ts                 # Package entry point, exports both providers
   floeActionProvider.ts    # 30 lending actions (FloeActionProvider)
   x402ActionProvider.ts    # 15 actions (6 x402 credit delegation + 9 agent-awareness)
-  schemas.ts               # Zod schemas for lending action inputs
+  schemas.ts               # Zod schemas for action inputs (e.g. InstantBorrowSchema, RepayLoanSchema)
   constants.ts             # Contract addresses, ABIs, known tokens
   flashArbBytecode.ts      # Compiled FlashArbReceiver bytecode + constructor ABI
   types.ts                 # TypeScript interfaces (Market, Loan, Intent, etc.)
