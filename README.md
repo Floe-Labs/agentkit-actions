@@ -21,7 +21,7 @@ Wallet, fiat on/off-ramp, working capital, x402 payments, and portable credit. O
 | 01 | **Agent Wallet** | `GA` | Any `WalletProvider` (CDP, Privy, Viem, Smart Wallet) + ERC-8004 identity |
 | 02 | **Fiat on-ramp** | `GA` (dashboard-driven) | Coinbase onramp via the [Floe dashboard](https://dev-dashboard.floelabs.xyz). Fiat off-ramp `Preview`. |
 | 03 | **Secured working capital** | `GA` | `instant_borrow`, `repay_and_reborrow`, `check_credit_status`, `request_credit`, `manual_match_credit` + 15 lending primitives |
-| 04 | **Unsecured working capital** | `Preview` | Receivables + chain-of-thought underwriting — [join the waitlist](https://floelabs.xyz/unsecured) |
+| 04 | **Unsecured working capital** | `Preview` | Receivables + chain-of-thought underwriting — email [hello@floelabs.xyz](mailto:hello@floelabs.xyz) for the design partner program |
 | 05 | **x402 payment facilitator** | `GA` | `grant_credit_delegation`, `revoke_credit_delegation`, `check_credit_delegation`, `x402_fetch`, `x402_get_balance`, `x402_get_transactions` |
 | 06 | **Credit & trust bureau** | Reader `Beta` · Writer `Preview` | `list_credit_thresholds`, `register_credit_threshold`, `delete_credit_threshold` today. Portable ERC-8004 read API in Beta. |
 
@@ -89,7 +89,7 @@ await agentkit.run("repay_and_reborrow", { loanId: "42" });
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
+┌────────────────────────────────────────────────────────┐
 │                   Agent Developer's App                      │
 │                                                             │
 │  ┌─────────────┐    ┌──────────┐    ┌────────────────────┐ │
@@ -109,10 +109,10 @@ await agentkit.run("repay_and_reborrow", { loanId: "42" });
 │  │ - ViemWalletProvider │ (dev — raw private key)      │   │
 │  │ - PrivyWalletProvider│ (embedded/delegated wallets) │   │
 │  └──────────────────────┼──────────────────────────────┘   │
-└─────────────────────────┼───────────────────────────────────┘
+└─────────────────────────┼──────────────────────────────────────┘
                           │ RPC calls + signed transactions
                           v
-┌─────────────────────────────────────────────────────────────┐
+┌────────────────────────────────────────────────────────┐
 │                    Base Mainnet (8453)                       │
 │                                                             │
 │  LendingIntentMatcher  0x17946...Bb175   <── write actions │
@@ -121,7 +121,7 @@ await agentkit.run("repay_and_reborrow", { loanId: "42" });
 │  x402 Facilitator      0x58ED...31f1     <── x402 payments │
 │  Aerodrome SwapRouter  0xBE6D...18a5     <── flash arb     │
 │  ERC-20 Tokens (WETH, USDC, cbBTC, ...) <── approvals     │
-└─────────────────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────────┘
 ```
 
 **Flow:** User speaks to LLM → LLM picks a Floe tool → AgentKit calls `FloeActionProvider` → provider uses `WalletProvider` to read chain / sign txs → transaction hits Floe contracts on Base.
