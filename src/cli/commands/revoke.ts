@@ -32,7 +32,12 @@ async function resolveWalletConfig(
 
 export async function runRevokeCommand(
   name: string,
-  facilitatorUrl: string,
+  // Optional override for the facilitator URL. Normally the agent's
+  // persisted `facilitatorUrl` is the authoritative source (it's the
+  // environment the agent was registered against) — overriding it from
+  // the CLI risks revoking in the wrong environment. Kept for advanced
+  // recovery flows where the local record's URL is stale.
+  facilitatorUrlOverride?: string,
 ): Promise<void> {
   const config = loadConfig();
   if (!config) {
@@ -56,12 +61,38 @@ export async function runRevokeCommand(
 
   const walletConfig = await resolveWalletConfig(config);
   const walletProvider = await createWallet(walletConfig);
+  // Prefer the agent's persisted facilitator URL — overriding from the
+  // caller is opt-in and rare; the agent was registered against exactly
+  // one facilitator and that's the only place revocation makes sense.
+  const facilitatorUrl = agent.facilitatorUrl ?? facilitatorUrlOverride;
+  if (!facilitatorUrl) {
+    console.error(
+      chalk.red(`No facilitator URL recorded for "${name}"; pass --facilitator-url to override.`),
+    );
+    process.exit(1);
+  }
+  if (facilitatorUrlOverride && facilitatorUrlOverride !== agent.facilitatorUrl) {
+    console.warn(
+      chalk.yellow(
+        `  Note: --facilitator-url (${facilitatorUrlOverride}) differs from the agent's persisted ` +
+          `URL (${agent.facilitatorUrl}). Using the agent's URL.`,
+      ),
+    );
+  }
   const client = new FloeApiClient(facilitatorUrl, walletProvider);
 
   const spinner = ora("Looking up active key...").start();
   try {
     const keys = await client.listAgentKeys(agent.agentId);
-    const active = keys[0];
+    // Prefer the key whose prefix matches what we recorded locally — the
+    // server returns the per-agent active list and the local registry's
+    // `keyPrefix` is the canonical identifier of the credential this CLI
+    // last minted. Falling back to keys[0] keeps the cap-of-1 case
+    // working even if local state drifts.
+    const active =
+      (agent.keyPrefix
+        ? keys.find((k) => k.keyPrefix === agent.keyPrefix)
+        : undefined) ?? keys[0];
     if (!active) {
       spinner.warn("No active keys found server-side. Clearing local entry.");
     } else {

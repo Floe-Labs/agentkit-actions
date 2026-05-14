@@ -80,12 +80,27 @@ export async function runOpenCreditLineCommand(args: OpenCreditLineArgs): Promis
     process.exit(1);
   }
 
-  if (args.maxLtvBps !== undefined && (args.maxLtvBps < 1 || args.maxLtvBps > 9500)) {
-    console.error(chalk.red("maxLtvBps must be 1..9500 (95% is the USDC/USDC market cap)."));
+  // Range checks alone don't catch NaN (`NaN < x` and `NaN > x` are both
+  // false) or fractional values; both would serialize to garbage on the
+  // wire. Enforce finite-integer explicitly before the bounds check.
+  if (
+    args.maxLtvBps !== undefined &&
+    (!Number.isFinite(args.maxLtvBps) ||
+      !Number.isInteger(args.maxLtvBps) ||
+      args.maxLtvBps < 1 ||
+      args.maxLtvBps > 9500)
+  ) {
+    console.error(chalk.red("maxLtvBps must be an integer in 1..9500 (95% is the USDC/USDC market cap)."));
     process.exit(1);
   }
-  if (args.maxRateBps !== undefined && (args.maxRateBps < 1 || args.maxRateBps > 10000)) {
-    console.error(chalk.red("maxRateBps must be 1..10000."));
+  if (
+    args.maxRateBps !== undefined &&
+    (!Number.isFinite(args.maxRateBps) ||
+      !Number.isInteger(args.maxRateBps) ||
+      args.maxRateBps < 1 ||
+      args.maxRateBps > 10000)
+  ) {
+    console.error(chalk.red("maxRateBps must be an integer in 1..10000."));
     process.exit(1);
   }
 

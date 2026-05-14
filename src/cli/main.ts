@@ -132,14 +132,11 @@ export async function main(args: string[]): Promise<void> {
       console.error(chalk.red("`revoke` requires an agent name."));
       process.exit(1);
     }
-    const config = loadConfig();
-    const agent = config ? getAgent(config, name) : undefined;
-    const facilitatorUrl =
-      agent?.facilitatorUrl ||
-      parseFlag(rest, "facilitator-url") ||
-      process.env.FLOE_FACILITATOR_URL ||
-      "https://x402.floe.xyz";
-    await runRevokeCommand(name, facilitatorUrl);
+    // The agent's persisted `facilitatorUrl` is the authoritative source;
+    // `--facilitator-url` is only an opt-in override for recovery flows
+    // where the local record's URL is wrong. runRevokeCommand re-reads
+    // the agent from config and prefers its stored URL.
+    await runRevokeCommand(name, parseFlag(rest, "facilitator-url"));
     return;
   }
   if (sub === "open-credit-line") {
@@ -166,6 +163,22 @@ export async function main(args: string[]): Promise<void> {
 }
 
 async function runInteractive(explicitAgent?: string): Promise<void> {
+  // Validate --agent BEFORE the banner + setup prompts. If the name is a
+  // typo, force-failing here saves the user a wallet prompt + AI prompt
+  // chain just to be told the agent doesn't exist.
+  if (explicitAgent) {
+    const preflightConfig = loadConfig();
+    if (!preflightConfig?.agents || !getAgent(preflightConfig, explicitAgent)) {
+      console.error(
+        chalk.red(
+          `Unknown agent "${explicitAgent}". Run \`floe-agent agents\` to list available agents, ` +
+            `or register one with \`floe-agent register --name ${explicitAgent}\`.`,
+        ),
+      );
+      process.exit(1);
+    }
+  }
+
   printBanner();
 
   const savedConfig = loadConfig();
@@ -422,8 +435,23 @@ function resolveAgentContext(
   config: FloeAgentConfig | null,
   explicit?: string,
 ): AgentRecord | undefined {
+  if (explicit) {
+    // Hard-fail on an unknown explicit --agent. Silently dropping back
+    // to "no agent" mode masks a typo and confuses users when paid
+    // /proxy/fetch calls then 401 with no obvious reason.
+    const resolved = config?.agents ? getAgent(config, explicit) : undefined;
+    if (!resolved) {
+      console.error(
+        chalk.red(
+          `Unknown agent "${explicit}". Run \`floe-agent agents\` to list available agents, ` +
+            `or register one with \`floe-agent register --name ${explicit}\`.`,
+        ),
+      );
+      process.exit(1);
+    }
+    return resolved;
+  }
   if (!config?.agents) return undefined;
-  if (explicit) return getAgent(config, explicit);
   if (config.activeAgent) return getAgent(config, config.activeAgent);
   const all = listAgents(config);
   if (all.length === 1) return all[0];

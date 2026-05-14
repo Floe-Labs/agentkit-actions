@@ -3,7 +3,7 @@ import ora from "ora";
 import { input, password, select } from "@inquirer/prompts";
 import { createWallet, type WalletConfig } from "../walletFactory.js";
 import { FloeApiClient } from "../floeApiClient.js";
-import { setAgentKey } from "../keychain.js";
+import { setAgentKey, envVarNameFor } from "../keychain.js";
 import {
   loadConfig,
   saveConfig,
@@ -219,7 +219,7 @@ export async function runRegisterCommand(args: RegisterArgs): Promise<void> {
   } else {
     console.log(
       chalk.yellow(
-        `  OS keychain unavailable. Set FLOE_AGENT_KEY_${args.name.toUpperCase().replace(/[^A-Z0-9]/g, "_")} to use this key later.`,
+        `  OS keychain unavailable. Set ${envVarNameFor(args.name, args.facilitatorUrl)} to use this key later.`,
       ),
     );
   }

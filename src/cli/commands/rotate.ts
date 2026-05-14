@@ -3,7 +3,7 @@ import ora from "ora";
 import { input, password } from "@inquirer/prompts";
 import { createWallet, type WalletConfig } from "../walletFactory.js";
 import { FloeApiClient } from "../floeApiClient.js";
-import { setAgentKey } from "../keychain.js";
+import { setAgentKey, envVarNameFor } from "../keychain.js";
 import {
   loadConfig,
   saveConfig,
@@ -51,7 +51,14 @@ export async function runRotateCommand(name: string): Promise<void> {
   let newPrefix: string;
   try {
     const keys = await client.listAgentKeys(agent.agentId);
-    const current = keys[0];
+    // Prefer the key matching the locally tracked prefix. Falling back
+    // to keys[0] keeps the cap-of-1 case working even if local state
+    // drifted (e.g., user rotated through the dashboard and lost the
+    // local registry).
+    const current =
+      (agent.keyPrefix
+        ? keys.find((k) => k.keyPrefix === agent.keyPrefix)
+        : undefined) ?? keys[0];
     if (!current) {
       spinner.fail("No active key to rotate. Use `floe-agent register` instead.");
       process.exit(1);
@@ -86,7 +93,7 @@ export async function runRotateCommand(name: string): Promise<void> {
   if (storedInKeychain) {
     console.log(chalk.dim("  Stored in OS keychain (or env-var fallback)."));
   } else {
-    const envName = `FLOE_AGENT_KEY_${name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
+    const envName = envVarNameFor(name, agent.facilitatorUrl);
     console.log(chalk.dim(`  Export ${envName} to load this key on next \`floe-agent run\`.`));
   }
   console.log("");
