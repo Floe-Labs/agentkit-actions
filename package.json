@@ -1,6 +1,6 @@
 {
   "name": "floe-agent",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Coinbase AgentKit ActionProvider for Floe DeFi lending protocol",
   "license": "MIT",
   "repository": {
@@ -60,6 +60,7 @@
     "@ai-sdk/anthropic": "^1.0.0",
     "ai-sdk-ollama": "^3.8.1",
     "@inquirer/prompts": "^7.0.0",
+    "@napi-rs/keyring": "^1.1.6",
     "chalk": "^5.0.0",
     "ora": "^8.0.0"
   },

@@ -6,7 +6,7 @@ import {
 } from "@coinbase/agentkit";
 import { encodeFunctionData } from "viem";
 import { z } from "zod";
-import { LENDING_MATCHER_ABI, ERC20_ABI, BASE_MAINNET_MATCHER } from "./constants.js";
+import { BASE_MAINNET_MATCHER } from "./constants.js";
 import type { Address } from "./types.js";
 import { formatBps, formatTokenAmount, formatAddress, formatDuration } from "./utils.js";
 
@@ -20,15 +20,19 @@ const NonNegIntString = z
   .string()
   .regex(/^(0|[1-9]\d*)$/, "Must be a non-negative integer");
 
-// Known collateral tokens on Base
-const KNOWN_COLLATERAL: Record<string, boolean> = {
-  "0x4200000000000000000000000000000000000006": true, // WETH
-  "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf": true, // cbBTC
-};
-
 export const GrantCreditDelegationSchema = z.object({
-  facilitatorAddress: AddressSchema.describe("The facilitator's operator address"),
-  facilitatorUrl: z.string().url()
+  name: z
+    .string()
+    .min(1)
+    .max(64)
+    .regex(/^[A-Za-z0-9 _-]+$/)
+    .describe(
+      "Human-friendly label for this agent (e.g. 'alpha', 'paid-search-bot'). " +
+        "Unique per developer. Used by the CLI/dashboard to identify the agent later.",
+    ),
+  facilitatorUrl: z
+    .string()
+    .url()
     .refine((u) => u.startsWith("https://"), "Must use HTTPS")
     .describe("The facilitator API base URL (e.g. https://x402.floe.xyz)"),
   borrowLimit: NonNegIntString.describe("Maximum borrow limit in USDC (e.g. '10000' for $10K)"),
@@ -38,15 +42,35 @@ export const GrantCreditDelegationSchema = z.object({
   expiryDays: NonNegIntString.default("90")
     .refine((v) => { const d = BigInt(v); return d >= 1n && d <= 3650n; }, "Must be 1-3650 days")
     .describe("Number of days until delegation expires"),
-  collateralToken: AddressSchema
-    .refine((v) => KNOWN_COLLATERAL[v.toLowerCase()] === true, "Must be WETH or cbBTC")
-    .describe("Collateral token address (WETH or cbBTC)"),
-  collateralApproval: NonNegIntString.optional()
+});
+
+export const OpenCreditLineSchema = z.object({
+  name: z
+    .string()
+    .min(1)
+    .max(64)
+    .regex(/^[A-Za-z0-9 _-]+$/)
     .describe(
-      "Optional bounded collateral allowance to grant the matcher (raw token units). " +
-      "If omitted, an unlimited approval is set (matches standard DeFi UX; matcher is a governance-controlled protocol). " +
-      "Set this to cap exposure if the matcher were ever compromised.",
+      "The agent name from `grant_credit_delegation` / `floe-agent register`. Must already exist server-side.",
     ),
+  facilitatorUrl: z
+    .string()
+    .url()
+    .refine((u) => u.startsWith("https://"), "Must use HTTPS")
+    .describe("The facilitator API base URL (e.g. https://x402.floe.xyz)"),
+  /** The Privy wallet's USDC deposit, e.g. "10000" for $10K. Borrow amount = deposit * maxLtvBps / 10000. */
+  depositUsdc: NonNegIntString.describe("USDC deposit amount (e.g. '10000' for $10K)"),
+  maxLtvBps: z
+    .number()
+    .int()
+    .min(1)
+    .max(9500)
+    .default(9500)
+    .describe("Optional LTV cap (1..9500). Default 9500 (95%, the USDC/USDC market cap)."),
+  /** Optional agent id override — the CLI persists this in `.floe-agent.json`, so most callers don't need to supply it. */
+  agentId: z.number().int().positive().optional().describe(
+    "Server-issued numeric agent id (from POST /v1/developer/agents). Pass when not already known.",
+  ),
 });
 
 export const RevokeCreditDelegationSchema = z.object({
@@ -121,19 +145,6 @@ export const EstimateX402CostSchema = z.object({
 
 const OPERATOR_ABI = [
   {
-    name: "setOperator",
-    type: "function",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "operator", type: "address" },
-      { name: "borrowLimit", type: "uint256" },
-      { name: "maxRateBps", type: "uint256" },
-      { name: "expiry", type: "uint256" },
-      { name: "onBehalfOfRestriction", type: "address" },
-    ],
-    outputs: [],
-  },
-  {
     name: "revokeOperator",
     type: "function",
     stateMutability: "nonpayable",
@@ -172,6 +183,13 @@ export interface X402Config {
   facilitatorUrl?: string;
   facilitatorApiKey?: string;
   matcherAddress?: Address;
+  /**
+   * Optional human-readable label for the active agent. Surfaced in
+   * action output when present so multi-agent CLI sessions are easy
+   * to disambiguate. Doesn't affect auth — the API key alone identifies
+   * the agent server-side.
+   */
+  agentName?: string;
 }
 
 // ── Provider ────────────────────────────────────────────────────────────────
@@ -180,6 +198,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
   private matcherAddress: Address;
   private defaultFacilitatorUrl: string;
   private defaultFacilitatorApiKey: string;
+  private agentName: string;
 
   constructor(config?: Partial<X402Config>) {
     super("x402", []);
@@ -187,6 +206,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     // Normalize: strip trailing slash
     this.defaultFacilitatorUrl = (config?.facilitatorUrl ?? "").replace(/\/+$/, "");
     this.defaultFacilitatorApiKey = config?.facilitatorApiKey ?? "";
+    this.agentName = config?.agentName ?? "";
   }
 
   supportsNetwork = (network: Network): boolean => {
@@ -203,6 +223,19 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     const apiKey = overrideKey || this.defaultFacilitatorApiKey;
     if (!baseUrl) throw new Error("facilitatorUrl not configured");
 
+    // When the caller supplies its own wallet-signature auth (the
+    // grant_credit_delegation action signs X-Wallet-Address / X-Signature /
+    // X-Timestamp directly), skip the cached Bearer to avoid double-auth.
+    // The server accepts whichever it sees first, and a stale Bearer from
+    // a previous successful registration would otherwise silently misroute
+    // a re-invocation of grant_credit_delegation to the wrong identity.
+    //
+    // Use the Headers constructor so we get case-insensitive lookup that
+    // also handles the Headers / tuple-array forms of HeadersInit. A plain
+    // `"X-Signature" in headers` check would silently miss those shapes
+    // and re-introduce the double-auth landmine.
+    const callerSigned = new Headers(options?.headers ?? {}).has("X-Signature");
+
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     try {
@@ -211,7 +244,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
         signal: controller.signal,
         headers: {
           "Content-Type": "application/json",
-          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+          ...(apiKey && !callerSigned ? { Authorization: `Bearer ${apiKey}` } : {}),
           ...(options?.headers ?? {}),
         },
       });
@@ -220,74 +253,17 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     }
   }
 
-  private async ensureAllowance(
-    walletProvider: EvmWalletProvider,
-    tokenAddress: Address,
-    spenderAddress: Address,
-    requiredAmount: bigint,
-  ): Promise<string | null> {
-    const owner = (await walletProvider.getAddress()) as Address;
-    const currentAllowance = (await walletProvider.readContract({
-      address: tokenAddress,
-      abi: ERC20_ABI,
-      functionName: "allowance",
-      args: [owner, spenderAddress],
-    })) as bigint;
-
-    if (currentAllowance >= requiredAmount) return null;
-
-    const data = encodeFunctionData({
-      abi: ERC20_ABI,
-      functionName: "approve",
-      args: [spenderAddress, requiredAmount],
-    });
-    return walletProvider.sendTransaction({ to: tokenAddress, data });
-  }
-
-  private generateNonce(): string {
-    // Crypto-safe nonce for replay prevention
-    const c = (globalThis as unknown as {
-      crypto?: {
-        randomUUID?: () => string;
-        getRandomValues?: (buf: Uint8Array) => Uint8Array;
-      };
-    }).crypto;
-    if (c?.randomUUID) {
-      return `${Date.now()}-${c.randomUUID()}`;
-    }
-    if (c?.getRandomValues) {
-      const bytes = new Uint8Array(16);
-      c.getRandomValues(bytes);
-      return `${Date.now()}-${Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("")}`;
-    }
-    // Node fallback
-    const nodeCrypto = require("crypto") as typeof import("crypto");
-    return `${Date.now()}-${nodeCrypto.randomBytes(16).toString("hex")}`;
-  }
-
-  private async getChainIdString(walletProvider: EvmWalletProvider): Promise<string> {
-    try {
-      const net = (walletProvider as unknown as { getNetwork?: () => Promise<{ chainId?: number | string | bigint }> | { chainId?: number | string | bigint } }).getNetwork?.();
-      const resolved = net && typeof (net as Promise<unknown>).then === "function" ? await net : net;
-      const id = (resolved as { chainId?: number | string | bigint } | undefined)?.chainId;
-      if (id !== undefined && id !== null) return typeof id === "bigint" ? id.toString() : String(id);
-    } catch { /* fall through */ }
-    return "8453";
-  }
-
-  private buildSignMessage(nonce: string, facilitatorAddress: string, chainId: string): string {
-    return `Register with Floe Facilitator\nFacilitator: ${facilitatorAddress}\nChain: ${chainId}\nNonce: ${nonce}`;
-  }
-
   // ── grant_credit_delegation ─────────────────────────────────────────────
 
   @CreateAction({
     name: "grant_credit_delegation",
     description:
-      "Grant credit delegation to an x402 facilitator. This allows the facilitator to borrow USDC on your behalf using your collateral. " +
-      "The facilitator uses borrowed funds to pay for x402 API resources automatically. " +
-      "You set a maximum borrow limit, interest rate cap, and expiry. " +
-      "This action: (1) calls the facilitator to create a Privy wallet for you, (2) calls setOperator on the lending contract, (3) approves your collateral token, (4) completes registration with the facilitator.",
+      "Register a new Floe credit agent. Floe creates a managed Privy wallet for the agent, " +
+      "delegates the facilitator on-chain server-side, and returns a scoped API key. " +
+      "You set a name, maximum borrow limit, interest rate cap, and expiry. " +
+      "The developer wallet is only used to sign the auth headers — no on-chain transactions are sent. " +
+      "The returned API key is stored for the rest of this session and used by every other x402 action. " +
+      "For multi-agent setups, prefer the CLI: `floe-agent register --name <name>` (stores the key in the OS keychain).",
     schema: GrantCreditDelegationSchema,
   })
   async grantCreditDelegation(
@@ -295,112 +271,209 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     args: z.infer<typeof GrantCreditDelegationSchema>,
   ): Promise<string> {
     try {
-      const agentAddress = await walletProvider.getAddress();
       const facilitatorUrl = args.facilitatorUrl.replace(/\/+$/, "");
-
-      // Step 1: Pre-register with facilitator to get Privy wallet address
-      const chainIdStr = await this.getChainIdString(walletProvider);
-      const nonce = this.generateNonce();
-      const signMessage = this.buildSignMessage(nonce, args.facilitatorAddress, chainIdStr);
-      const signature = await walletProvider.signMessage(signMessage);
-
-      const preRegResp = await this.facilitatorFetch("/agents/pre-register", {
-        method: "POST",
-        body: JSON.stringify({ walletAddress: agentAddress, signature, nonce }),
-      }, facilitatorUrl);
-
-      if (!preRegResp.ok) {
-        const err = (await preRegResp.json()) as { error?: string };
-        return `Pre-registration failed: ${err.error ?? preRegResp.statusText}`;
-      }
-
-      const { privyWalletAddress } = (await preRegResp.json()) as { privyWalletAddress: string };
-
-      if (!/^0x[0-9a-fA-F]{40}$/.test(privyWalletAddress)) {
-        return `Pre-registration returned invalid Privy wallet address: ${privyWalletAddress}`;
-      }
-
-      // Step 2: Call setOperator on the lending contract
       const usdcDecimals = 6;
-      const borrowLimitRaw = BigInt(args.borrowLimit) * BigInt(10 ** usdcDecimals);
-      const maxRateBps = BigInt(args.maxRateBps);
-      const expiryTimestamp = BigInt(Math.floor(Date.now() / 1000)) + BigInt(args.expiryDays) * 86400n;
+      const borrowLimitRaw = (BigInt(args.borrowLimit) * BigInt(10 ** usdcDecimals)).toString();
+      const maxRateBpsNum = Number(args.maxRateBps);
+      const expirySeconds = Number(args.expiryDays) * 86400;
 
-      const setOperatorData = encodeFunctionData({
-        abi: OPERATOR_ABI,
-        functionName: "setOperator",
-        args: [
-          args.facilitatorAddress as `0x${string}`,
-          borrowLimitRaw,
-          maxRateBps,
-          expiryTimestamp,
-          privyWalletAddress as `0x${string}`,
-        ],
-      });
+      const authHeaders = await this.buildSignedHeaders(walletProvider);
 
-      const setOpTxHash = await walletProvider.sendTransaction({
-        to: this.matcherAddress,
-        data: setOperatorData,
-      });
-
-      // Step 3: Approve collateral. Defaults to unlimited (matcher is a governance-controlled
-      // protocol; standard DeFi UX). Users can bound exposure via args.collateralApproval.
-      const MAX_UINT256 = BigInt("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
-      const approvalAmount = args.collateralApproval ? BigInt(args.collateralApproval) : MAX_UINT256;
-      const approveTxHash = await this.ensureAllowance(
-        walletProvider,
-        args.collateralToken as Address,
-        this.matcherAddress,
-        approvalAmount,
+      // Step 1: create the managed agent. Server provisions Privy wallet
+      // + setOperator() delegation in-flight; we just wait for the result.
+      const createResp = await this.facilitatorFetch(
+        "/v1/developer/agents",
+        {
+          method: "POST",
+          headers: authHeaders,
+          body: JSON.stringify({
+            name: args.name,
+            borrowLimitRaw,
+            maxRateBps: maxRateBpsNum,
+            expirySeconds,
+          }),
+        },
+        facilitatorUrl,
       );
 
-      // Step 4: Complete registration with facilitator
-      const regNonce = this.generateNonce();
-      const regMessage = this.buildSignMessage(regNonce, args.facilitatorAddress, chainIdStr);
-      const regSignature = await walletProvider.signMessage(regMessage);
-
-      const regResp = await this.facilitatorFetch("/agents/register", {
-        method: "POST",
-        body: JSON.stringify({ walletAddress: agentAddress, signature: regSignature, nonce: regNonce }),
-      }, facilitatorUrl);
-
-      if (!regResp.ok) {
-        const err = (await regResp.json()) as { error?: string };
-        return `Registration failed (delegation was set on-chain): ${err.error ?? regResp.statusText}. ` +
-          `You can retry registration later — the on-chain delegation is active.`;
+      if (!createResp.ok) {
+        const err = (await createResp.json().catch(() => ({}))) as { error?: string; detail?: string };
+        return `Agent creation failed: ${err.detail ?? err.error ?? createResp.statusText}`;
       }
-
-      const regResult = (await regResp.json()) as {
-        agentId: string;
-        apiKey: string;
+      const created = (await createResp.json()) as {
+        agentId: number;
+        status: string;
         privyWalletAddress: string;
-        creditLimit: string;
+        delegationTxHash: string;
       };
 
-      // Store for subsequent calls in this session
-      this.defaultFacilitatorApiKey = regResult.apiKey;
+      // Step 2: mint an API key for the freshly-created agent. Auth
+      // headers expire after 5 minutes, so we re-sign rather than reuse.
+      const keyHeaders = await this.buildSignedHeaders(walletProvider);
+      const keyResp = await this.facilitatorFetch(
+        `/v1/developer/agents/${created.agentId}/keys`,
+        {
+          method: "POST",
+          headers: keyHeaders,
+          body: JSON.stringify({ label: args.name }),
+        },
+        facilitatorUrl,
+      );
+      if (!keyResp.ok) {
+        const err = (await keyResp.json().catch(() => ({}))) as { error?: string; detail?: string };
+        return (
+          `Agent created (id=${created.agentId}) but key minting failed: ${err.detail ?? err.error ?? keyResp.statusText}. ` +
+          `Mint a key via the dashboard or \`floe-agent rotate ${args.name}\` to recover.`
+        );
+      }
+      const keyBody = (await keyResp.json()) as { key: string; keyPrefix: string };
+
+      // Store for subsequent calls in this session.
+      this.defaultFacilitatorApiKey = keyBody.key;
       this.defaultFacilitatorUrl = facilitatorUrl;
+      this.agentName = args.name;
 
-      const creditLimitFormatted = formatTokenAmount(BigInt(regResult.creditLimit), usdcDecimals, "USDC");
-      const keyPreview = regResult.apiKey.slice(-4);
-
+      const keyPreview = keyBody.key.slice(-4);
       return [
-        "## Credit Delegation Granted\n",
-        `**Facilitator**: ${formatAddress(args.facilitatorAddress)}`,
-        `**Privy Wallet**: ${formatAddress(regResult.privyWalletAddress)}`,
-        `**Credit Limit**: ${creditLimitFormatted}`,
-        `**Max Rate**: ${formatBps(maxRateBps)} APR`,
+        "## Floe Agent Registered\n",
+        `**Name**: ${args.name}`,
+        `**Agent ID**: ${created.agentId}`,
+        `**Status**: ${created.status}`,
+        `**Privy Wallet**: ${formatAddress(created.privyWalletAddress)}`,
+        `**Credit Limit**: ${formatTokenAmount(BigInt(borrowLimitRaw), usdcDecimals, "USDC")}`,
+        `**Max Rate**: ${formatBps(BigInt(args.maxRateBps))} APR`,
         `**Expires**: ${formatDuration(BigInt(args.expiryDays) * 86400n)}`,
-        "",
-        `**setOperator tx**: ${setOpTxHash}`,
-        approveTxHash ? `**Approval tx**: ${approveTxHash}` : "**Approval**: Already sufficient",
+        `**Delegation tx**: ${created.delegationTxHash}`,
         "",
         `> API key stored for this session (ending ...${keyPreview}).`,
-        "> Pass it via `X402Config.facilitatorApiKey` if you need it across sessions.",
+        "> For persistent storage across sessions, prefer `floe-agent register --name " +
+          args.name +
+          "` from the CLI — it saves the key to your OS keychain.",
+        "",
+        `> **Next step:** the agent's Privy wallet has no USDC yet, so its credit line is not yet open.`,
+        `> Fund the Privy wallet (\`${created.privyWalletAddress}\`) with USDC, then call \`open_credit_line\``,
+        `> (or \`floe-agent open-credit-line --name ${args.name} --deposit <usdc>\` from the CLI).`,
       ].join("\n");
     } catch (e) {
-      return `Error granting credit delegation: ${e instanceof Error ? e.message : String(e)}`;
+      return `Error registering Floe agent: ${e instanceof Error ? e.message : String(e)}`;
     }
+  }
+
+  // ── open_credit_line ────────────────────────────────────────────────────
+
+  @CreateAction({
+    name: "open_credit_line",
+    description:
+      "Open the USDC/USDC credit line for a previously-registered Floe agent. The agent's Privy wallet " +
+      "must already hold at least `depositUsdc` USDC (fund it via the dashboard's Coinbase on-ramp or a " +
+      "direct on-chain transfer first). Floe server-signs the borrow intent FROM the agent's Privy wallet; " +
+      "the solver matches it asynchronously and the agent's spendable credit becomes non-zero a few seconds later. " +
+      "Returns the on-chain registerTxHash + a placeholder loanId. For multi-agent setups, prefer the CLI: " +
+      "`floe-agent open-credit-line --name <name> --deposit <usdc>`.",
+    schema: OpenCreditLineSchema,
+  })
+  async openCreditLine(
+    walletProvider: EvmWalletProvider,
+    args: z.infer<typeof OpenCreditLineSchema>,
+  ): Promise<string> {
+    try {
+      const facilitatorUrl = args.facilitatorUrl.replace(/\/+$/, "");
+      const usdcDecimals = 6;
+      const depositRaw = (BigInt(args.depositUsdc) * BigInt(10 ** usdcDecimals)).toString();
+      if (BigInt(depositRaw) <= 0n) {
+        return `Invalid depositUsdc: ${args.depositUsdc}. Must be > 0.`;
+      }
+
+      // If the caller didn't pass an explicit agent id, list their agents
+      // and find one matching the requested name. The list endpoint accepts
+      // the same wallet-signature auth we already build below.
+      let agentId = args.agentId;
+      if (!agentId) {
+        const listHeaders = await this.buildSignedHeaders(walletProvider);
+        const listResp = await this.facilitatorFetch(
+          "/v1/developer/agents",
+          { method: "GET", headers: listHeaders },
+          facilitatorUrl,
+        );
+        if (!listResp.ok) {
+          const err = (await listResp.json().catch(() => ({}))) as { error?: string; detail?: string };
+          return `Failed to list agents: ${err.detail ?? err.error ?? listResp.statusText}`;
+        }
+        const body = (await listResp.json()) as { agents: Array<{ id: number; name: string }> };
+        const match = body.agents.find((a) => a.name === args.name);
+        if (!match) {
+          return (
+            `No agent named "${args.name}" found for this developer. ` +
+            `Register one with \`grant_credit_delegation\` first.`
+          );
+        }
+        agentId = match.id;
+      }
+
+      const openHeaders = await this.buildSignedHeaders(walletProvider);
+      const openResp = await this.facilitatorFetch(
+        `/v1/developer/agents/${agentId}/open-credit-line`,
+        {
+          method: "POST",
+          headers: openHeaders,
+          body: JSON.stringify({
+            depositRaw,
+            maxLtvBps: args.maxLtvBps,
+          }),
+        },
+        facilitatorUrl,
+      );
+      if (!openResp.ok) {
+        const err = (await openResp.json().catch(() => ({}))) as { error?: string; detail?: string };
+        return `Open credit line failed: ${err.detail ?? err.error ?? openResp.statusText}`;
+      }
+      const result = (await openResp.json()) as {
+        loanId: string;
+        registerTxHash: string;
+        approveTxHash: string | null;
+        principalRaw: string;
+        collateralAmountRaw: string;
+        status: string;
+      };
+
+      const lines = [
+        "## Credit Line Submitted\n",
+        `**Agent**: ${args.name} (id=${agentId})`,
+        `**Deposit**: ${formatTokenAmount(BigInt(result.collateralAmountRaw), usdcDecimals, "USDC")}`,
+        `**Borrow**: ${formatTokenAmount(BigInt(result.principalRaw), usdcDecimals, "USDC")}`,
+        `**Register tx**: ${result.registerTxHash}`,
+      ];
+      if (result.approveTxHash) {
+        lines.push(`**Approve tx**: ${result.approveTxHash}`);
+      }
+      lines.push(
+        "",
+        `> Status: \`${result.status}\`. The solver matches against an open lend offer asynchronously;`,
+        `> spendable credit (\`creditIn\`) becomes non-zero once status flips to \`active\` (usually a few seconds).`,
+      );
+      return lines.join("\n");
+    } catch (e) {
+      return `Error opening credit line: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  /**
+   * EIP-191 wallet-signed auth headers for the Floe Developer API.
+   * Message format MUST match middleware/auth.ts:47 server-side.
+   */
+  private async buildSignedHeaders(
+    walletProvider: EvmWalletProvider,
+  ): Promise<Record<string, string>> {
+    const address = await walletProvider.getAddress();
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const message = `Floe Credit API\nTimestamp: ${timestamp}`;
+    const signature = await walletProvider.signMessage(message);
+    return {
+      "X-Wallet-Address": address,
+      "X-Signature": signature,
+      "X-Timestamp": timestamp,
+      "Content-Type": "application/json",
+    };
   }
 
   // ── revoke_credit_delegation ────────────────────────────────────────────
