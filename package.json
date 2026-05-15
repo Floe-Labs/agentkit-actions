@@ -12,6 +12,7 @@
     "url": "https://github.com/Floe-Labs/agentkit-actions/issues"
   },
   "type": "module",
+  "sideEffects": false,
   "engines": {
     "node": ">=18"
   },
