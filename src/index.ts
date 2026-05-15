@@ -18,3 +18,16 @@ export {
 export type { FloeConfig } from "./types.js";
 export type { X402Config } from "./x402ActionProvider.js";
 export * from "./schemas.js";
+
+// High-level runtime client. No wallet, no chain knowledge — `floe_*` key only.
+export {
+  FloeAgent,
+  FloeAgentError,
+} from "./floeAgent.js";
+export type {
+  FloeAgentConfig,
+  X402FetchInput,
+  X402FetchResult,
+  BalanceResult,
+  TransactionsResult,
+} from "./floeAgent.js";
