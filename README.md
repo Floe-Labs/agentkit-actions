@@ -543,7 +543,7 @@ npm pack
 
 # In your consumer project — substitute the actual tarball name printed
 # by `npm pack` above; it tracks the `version` field in package.json.
-npm install ../agentkit-actions/floe-agent-0.4.0.tgz
+npm install ../agentkit-actions/floe-agent-<version>.tgz
 ```
 
 This is the safest way to validate what consumers will actually get. Verify contents first:
