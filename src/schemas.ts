@@ -511,9 +511,11 @@ export const RenewCreditLineSchema = z.object({
 // ── v2 Credit Actions (SDK-backed) ──────────────────────────────────────
 
 export const InstantBorrowSchema = z.object({
-  marketId: Bytes32Schema.describe(
-    "The market ID (loan token + collateral token pair).",
-  ),
+  marketId: Bytes32Schema
+    .optional()
+    .describe(
+      "The market ID (loan token + collateral token pair). Optional — omit to use the canonical USDC/USDC same-token market on Base Mainnet, which is the recommended default for agents (no price risk, only interest-accrual liquidation). Pass an explicit market ID only when you want to borrow against a volatile collateral such as WETH or cbBTC. See developers/networks.md for the full market list.",
+    ),
   borrowAmount: z
     .string()
     .describe("Amount to borrow in raw token units."),
@@ -529,7 +531,9 @@ export const InstantBorrowSchema = z.object({
   minLtvBps: z
     .string()
     .default("8000")
-    .describe("Minimum LTV in basis points (default: 8000 = 80%)."),
+    .describe(
+      "Minimum LTV in basis points (default: 8000 = 80%). For agents pushing the USDC/USDC market up to 99% LTV, set this to '9900'. Same-token markets require only a 50bps gap to the lender's maxLtvBps; volatile markets require 800bps.",
+    ),
   onBehalfOf: AddressSchema
     .optional()
     .describe(

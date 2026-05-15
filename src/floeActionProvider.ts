@@ -19,6 +19,7 @@ import {
   BASE_MAINNET_MATCHER,
   BASE_MAINNET_VIEWS,
   BASE_MAINNET_ORACLE,
+  BASE_MAINNET_USDC_USDC_MARKET_ID,
   AERODROME_SWAP_ROUTER_ADDRESS,
   BASE_WETH_ADDRESS,
   ORACLE_PRICE_SCALE,
@@ -2615,7 +2616,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
   @CreateAction({
     name: "instant_borrow",
     description:
-      "Instantly borrow funds by auto-selecting the best available lend intent. Single action: queries the on-chain intent book, picks the lowest-rate compatible offer, and executes the 2-tx borrow flow (register + match). For DeFi agents that need capital in seconds, not minutes of browsing. Requires rpcUrl in FloeConfig.",
+      "Instantly borrow funds by auto-selecting the best available lend intent. Single action: queries the on-chain intent book, picks the lowest-rate compatible offer, and executes the 2-tx borrow flow (register + match). For DeFi agents that need capital in seconds, not minutes of browsing. Defaults to the USDC/USDC same-token market on Base Mainnet when `marketId` is omitted — that is the recommended path for AI agents (no price risk, only interest-accrual liquidation). Requires rpcUrl in FloeConfig.",
     schema: InstantBorrowSchema,
   })
   async instantBorrow(
@@ -2623,7 +2624,11 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
     args: z.infer<typeof InstantBorrowSchema>,
   ): Promise<string> {
     try {
-      const marketId = args.marketId as `0x${string}`;
+      // Auto-select the canonical USDC/USDC market when no marketId is supplied.
+      // This is the agent-friendly default — same-token, no oracle dependency,
+      // and the only liquidation path is unpaid interest. Callers who need a
+      // volatile-collateral market (WETH, cbBTC) must pass marketId explicitly.
+      const marketId = (args.marketId ?? BASE_MAINNET_USDC_USDC_MARKET_ID) as `0x${string}`;
       const borrowAmount = BigInt(args.borrowAmount);
       const maxInterestRateBps = BigInt(args.maxInterestRateBps);
       const minLtvBps = BigInt(args.minLtvBps);
@@ -2676,7 +2681,7 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
         maxInterestRateBps: args.maxInterestRateBps,
         minLtvBps: args.minLtvBps,
         duration: args.duration,
-        marketId: args.marketId,
+        marketId,
         matcherCommissionBps: "50",
         expirySeconds: "300",
         onBehalfOf: args.onBehalfOf,

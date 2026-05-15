@@ -15,6 +15,26 @@ export const AERODROME_SWAP_ROUTER_ADDRESS: Address =
 export const BASE_WETH_ADDRESS: Address =
   "0x4200000000000000000000000000000000000006";
 
+// ── Canonical Markets ────────────────────────────────────────────────────────
+// The USDC/USDC same-token market is the recommended default for agents — no
+// price risk, 95% origination LTV (up to 99% via the aggressive opt-in), and
+// the only liquidation path is interest accrual. SDK actions that take an
+// optional `marketId` fall back to this when the caller omits it.
+
+export const BASE_MAINNET_USDC_USDC_MARKET_ID: `0x${string}` =
+  "0x5027ae5ed5c85380c5dfa34a79915f41f139f4e859f56d15a6f958ea6b662820";
+
+/**
+ * USDC/USDC origination-LTV ceiling used by the credit-line and instant-borrow
+ * flows. The protocol's hard liquidation threshold is 9950bps (99.5%); we cap
+ * origination at 9900 to leave one half-percent of buffer for the half-block
+ * between intent submission and on-chain settlement.
+ *
+ * Anything above 9500bps is the "aggressive" mode — only safe for short-
+ * duration loans because the interest-accrual headroom is small.
+ */
+export const USDC_USDC_MAX_ORIGINATION_LTV_BPS = 9900;
+
 // ── Protocol Constants ──────────────────────────────────────────────────────
 
 export const ORACLE_PRICE_SCALE = 10n ** 36n;
