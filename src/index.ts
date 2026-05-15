@@ -27,7 +27,8 @@ export {
 export type {
   FloeAgentConfig,
   X402FetchInput,
-  X402FetchResult,
+  FetchResult,
+  X402FetchResult, // deprecated alias for FetchResult
   BalanceResult,
   TransactionsResult,
 } from "./floeAgent.js";

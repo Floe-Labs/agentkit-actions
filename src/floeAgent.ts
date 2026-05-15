@@ -18,6 +18,19 @@
 
 const DEFAULT_BASE_URL = "https://credit-api.floelabs.xyz";
 const DEFAULT_TIMEOUT_MS = 15_000;
+const USDC_DECIMALS = 6;
+const USDC_SCALE = 1_000_000;
+
+/** Convert a raw USDC integer string (6 decimals) to a dollar number. */
+function rawToDollars(raw: string | null | undefined): number {
+  if (!raw) return 0;
+  // String math first to avoid float precision loss on amounts > $9_007_199.
+  // For balances under that ceiling, dividing the BigInt by the scale is exact
+  // enough for display; agents typically deal in cents and sub-cents.
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return 0;
+  return n / USDC_SCALE;
+}
 
 export interface FloeAgentConfig {
   /** Agent runtime key (`floe_*`) minted by `floe-agent register` or the dashboard. */
@@ -37,23 +50,35 @@ export interface X402FetchInput {
   idempotencyKey?: string;
 }
 
-export interface X402FetchResult {
+export interface FetchResult {
   status: number;
   headers: Record<string, string>;
   body: string;
-  /** USDC paid for this call (raw 6-decimal units, integer string). Absent for free passthrough responses. */
-  costRaw?: string;
+  /** Dollar amount paid for this call (0 for free passthrough). */
+  cost: number;
   /** True when this was a cached replay against the same idempotency key. */
   idempotentReplay: boolean;
+  /** Raw 6-decimal USDC integer string (advanced; prefer `cost`). */
+  costRaw?: string;
 }
 
+/** @deprecated Use FetchResult — kept for one release for compatibility. */
+export type X402FetchResult = FetchResult;
+
 export interface BalanceResult {
-  creditLimitRaw: string;
-  creditUsedRaw: string;
-  creditAvailableRaw: string;
-  pendingSettlementsRaw: string;
-  activeLoans: Array<{ loanId: string; principalRaw?: string }>;
-  delegationActive: boolean;
+  /** Dollar amount available to spend right now. */
+  available: number;
+  /** Dollar amount currently reserved against in-flight payments. */
+  pending: number;
+  /** Raw 6-decimal USDC strings (advanced; prefer `available` / `pending`). */
+  raw: {
+    creditLimitRaw: string;
+    creditUsedRaw: string;
+    creditAvailableRaw: string;
+    pendingSettlementsRaw: string;
+    activeLoans: Array<{ loanId: string; principalRaw?: string }>;
+    delegationActive: boolean;
+  };
 }
 
 export interface TransactionsResult {
@@ -98,20 +123,24 @@ export class FloeAgent {
   }
 
   /**
-   * Fetch any URL through the Floe x402 facilitator. If the URL returns
-   * HTTP 402, the facilitator pays automatically from the agent's credit
-   * line and retries; the agent code sees the final 2xx (or a Floe error
-   * code if credit is unavailable). Free URLs pass through unchanged.
+   * Call any URL. If the API is x402-gated, payment happens automatically
+   * (debited from your prepaid balance). Free URLs pass through unchanged.
+   *
+   * Pass a URL string for the simple case, or an object for advanced
+   * options (HTTP method, headers, body, idempotency key).
    */
-  async x402Fetch(input: X402FetchInput): Promise<X402FetchResult> {
+  async fetch(input: string | X402FetchInput): Promise<FetchResult> {
+    const opts: X402FetchInput =
+      typeof input === "string" ? { url: input } : input;
+
     const headers: Record<string, string> = {};
-    if (input.idempotencyKey) headers["Idempotency-Key"] = input.idempotencyKey;
+    if (opts.idempotencyKey) headers["Idempotency-Key"] = opts.idempotencyKey;
 
     const resp = await this.request("POST", "/v1/proxy/fetch", {
-      url: input.url,
-      method: input.method ?? "GET",
-      headers: input.headers,
-      body: input.body,
+      url: opts.url,
+      method: opts.method ?? "GET",
+      headers: opts.headers,
+      body: opts.body,
     }, headers);
 
     const responseHeaders: Record<string, string> = {};
@@ -129,24 +158,46 @@ export class FloeAgent {
         // non-JSON error body — keep as-is
       }
       throw new FloeAgentError(
-        parsed.detail ?? parsed.error ?? `x402_fetch failed: ${resp.status}`,
+        parsed.detail ?? parsed.error ?? `fetch failed: ${resp.status}`,
         resp.status,
         parsed.error,
         body,
       );
     }
 
+    const costRaw = responseHeaders["x-floe-cost-usdc"];
     return {
       status: resp.status,
       headers: responseHeaders,
       body,
-      costRaw: responseHeaders["x-floe-cost-usdc"] ?? undefined,
+      cost: rawToDollars(costRaw),
+      costRaw: costRaw ?? undefined,
       idempotentReplay: responseHeaders["x-floe-idempotent-replay"] === "true",
     };
   }
 
-  /** Check the agent's credit limit, used, available, and active loans. */
-  async getBalance(): Promise<BalanceResult> {
+  /** @deprecated Use `fetch` — same behavior, friendlier name. */
+  async x402Fetch(input: X402FetchInput): Promise<FetchResult> {
+    return this.fetch(input);
+  }
+
+  /**
+   * Return the agent's spendable balance, in dollars.
+   *
+   * For most code this is the one number you want:
+   *
+   *     if (await agent.balance() < 5) topUp();
+   *
+   * For richer detail (active loans, pending settlements, raw integer
+   * units), call `balanceDetails()`.
+   */
+  async balance(): Promise<number> {
+    const detail = await this.balanceDetails();
+    return detail.available;
+  }
+
+  /** Full balance breakdown including pending settlements and raw values. */
+  async balanceDetails(): Promise<BalanceResult> {
     const resp = await this.request("GET", "/v1/agents/balance");
     const data = await this.parseJson<{
       creditLimit: string;
@@ -155,15 +206,25 @@ export class FloeAgent {
       pendingSettlements?: string;
       activeLoans?: Array<{ loanId: string; principalRaw?: string }>;
       delegationActive?: boolean;
-    }>(resp, "get_balance");
+    }>(resp, "balance");
+    const pendingRaw = data.pendingSettlements ?? "0";
     return {
-      creditLimitRaw: data.creditLimit,
-      creditUsedRaw: data.creditUsed,
-      creditAvailableRaw: data.creditAvailable,
-      pendingSettlementsRaw: data.pendingSettlements ?? "0",
-      activeLoans: data.activeLoans ?? [],
-      delegationActive: data.delegationActive ?? false,
+      available: rawToDollars(data.creditAvailable),
+      pending: rawToDollars(pendingRaw),
+      raw: {
+        creditLimitRaw: data.creditLimit,
+        creditUsedRaw: data.creditUsed,
+        creditAvailableRaw: data.creditAvailable,
+        pendingSettlementsRaw: pendingRaw,
+        activeLoans: data.activeLoans ?? [],
+        delegationActive: data.delegationActive ?? false,
+      },
     };
+  }
+
+  /** @deprecated Use `balance()` (dollars) or `balanceDetails()` (full). */
+  async getBalance(): Promise<BalanceResult> {
+    return this.balanceDetails();
   }
 
   /** Paginated x402 payment history for this agent. */
@@ -175,18 +236,32 @@ export class FloeAgent {
   }
 
   /**
-   * Preview an x402 call without paying — returns the expected cost and
-   * whether the agent currently has enough credit. Cheap, idempotent,
-   * doesn't reserve balance.
+   * Preview the cost of calling a URL without actually paying. Returns the
+   * expected dollar price (0 if free) and whether the agent currently has
+   * enough balance to pay it.
    */
-  async estimateX402Cost(url: string, method = "GET"): Promise<{
-    costRaw: string | null;
-    willExceedAvailable: boolean;
-    x402: boolean;
+  async estimateCost(url: string, method = "GET"): Promise<{
+    cost: number;
+    canAfford: boolean;
+    isPaid: boolean;
   }> {
     const qs = new URLSearchParams({ url, method });
     const resp = await this.request("GET", `/v1/x402/estimate?${qs.toString()}`);
-    return this.parseJson(resp, "estimate_x402_cost");
+    const data = await this.parseJson<{
+      costRaw: string | null;
+      willExceedAvailable: boolean;
+      x402: boolean;
+    }>(resp, "estimate_cost");
+    return {
+      cost: rawToDollars(data.costRaw),
+      canAfford: !data.willExceedAvailable,
+      isPaid: data.x402,
+    };
+  }
+
+  /** @deprecated Use `estimateCost`. */
+  async estimateX402Cost(url: string, method = "GET") {
+    return this.estimateCost(url, method);
   }
 
   // ── internals ────────────────────────────────────────────────────────────
