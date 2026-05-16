@@ -4,16 +4,19 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Base Mainnet](https://img.shields.io/badge/Base-Mainnet-0052FF)](https://basescan.org/address/0x17946cD3e180f82e632805e5549EC913330Bb175)
 
-**The Financial OS for AI Agents — TypeScript SDK.**
+**Credit and payments for AI agent developers — TypeScript SDK. No crypto required.**
 
-Wallet, fiat on/off-ramp, working capital, x402 payments, and portable credit. One SDK. Works with Coinbase AgentKit, LangChain, Vercel AI SDK, Claude/Cursor (via MCP), and any framework that speaks HTTP.
+1. **Sign up with email + a funding source.** Card, Apple Pay, Google Pay, or bank transfer. Floe provisions your wallets in the background — no MetaMask, no seed phrase, no gas token.
+2. **Floe issues an x402 credit line to your agent's wallet.** Set spending controls — per-call cap, daily limit, allowed destinations.
+3. **Your agent pays vendors per-call; you get real-time visibility.** Every call is a typed receipt: target URL, amount, status, time. Reconcile, alert, or revoke from the dashboard.
 
-`floe-agent` is the official TypeScript SDK and ships **two AgentKit `ActionProvider`s** that together expose 45 actions across the full Floe stack:
+`floe-agent` is the official TypeScript SDK. The high-level `FloeAgent` client gives you the three-step loop in code; the lower-level action providers expose the full surface for self-custody and framework integrations.
 
-- **`floeActionProvider()`** — 30 lending actions (markets, intents, loans, collateral, flash loans, credit-facility helpers)
-- **`x402ActionProvider()`** — 15 actions (6 x402 credit-delegation + 9 agent-awareness)
+- **`FloeAgent({ apiKey })`** — runtime client. No wallet, no chain knowledge. `agent.fetch(url)`, `agent.balance()`, dollars in / dollars out.
+- **`floeActionProvider()`** — 30 lending actions (markets, intents, loans, collateral, flash loans, credit-facility helpers).
+- **`x402ActionProvider()`** — 15 actions (6 x402 credit-delegation + 9 agent-awareness).
 
-Register **both** in `actionProviders: [...]` if you want the full 45-action surface. Python parity ships as [`floe-agentkit-actions`](https://github.com/floe-labs/agentkit-actions-py).
+Register both action providers in `actionProviders: [...]` if you want the full 45-action surface. Python parity ships as [`floe-agentkit-actions`](https://github.com/floe-labs/agentkit-actions-py).
 
 > **Proof points:** 3,000+ secured working capital lines issued · zero defaults · 13,000+ x402 APIs reachable via the Floe proxy.
 
