@@ -8,6 +8,7 @@ import {
   getAgent,
   type FloeAgentConfig,
 } from "../config.js";
+import { USDC_USDC_MAX_ORIGINATION_LTV_BPS } from "../../constants.js";
 
 export interface OpenCreditLineArgs {
   name: string;
@@ -88,11 +89,11 @@ export async function runOpenCreditLineCommand(args: OpenCreditLineArgs): Promis
     (!Number.isFinite(args.maxLtvBps) ||
       !Number.isInteger(args.maxLtvBps) ||
       args.maxLtvBps < 1 ||
-      args.maxLtvBps > 9900)
+      args.maxLtvBps > USDC_USDC_MAX_ORIGINATION_LTV_BPS)
   ) {
     console.error(
       chalk.red(
-        "maxLtvBps must be an integer in 1..9900. The conservative ceiling is 9500 (95%, ~5% interest-accrual headroom). Values 9501..9900 are the aggressive USDC/USDC opt-in — only safe for credit lines you close or roll on a tight cadence.",
+        `maxLtvBps must be an integer in 1..${USDC_USDC_MAX_ORIGINATION_LTV_BPS}. The conservative ceiling is 9500 (95%, ~5% interest-accrual headroom). Values 9501..${USDC_USDC_MAX_ORIGINATION_LTV_BPS} are the aggressive USDC/USDC opt-in — only safe for credit lines you close or roll on a tight cadence.`,
       ),
     );
     process.exit(1);

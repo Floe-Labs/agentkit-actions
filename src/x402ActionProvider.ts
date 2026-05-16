@@ -6,7 +6,10 @@ import {
 } from "@coinbase/agentkit";
 import { encodeFunctionData } from "viem";
 import { z } from "zod";
-import { BASE_MAINNET_MATCHER } from "./constants.js";
+import {
+  BASE_MAINNET_MATCHER,
+  USDC_USDC_MAX_ORIGINATION_LTV_BPS,
+} from "./constants.js";
 import type { Address } from "./types.js";
 import { formatBps, formatTokenAmount, formatAddress, formatDuration } from "./utils.js";
 
@@ -64,10 +67,10 @@ export const OpenCreditLineSchema = z.object({
     .number()
     .int()
     .min(1)
-    .max(9900)
+    .max(USDC_USDC_MAX_ORIGINATION_LTV_BPS)
     .default(9500)
     .describe(
-      "Optional LTV cap (1..9900) for the USDC/USDC credit line. Default 9500 (95%) — the conservative origination ceiling with ~5% headroom for interest accrual before liquidation. Values 9501..9900 enable the aggressive mode, only safe for short-duration loans that you repay on a tight cadence: at 9900 (99%) with a 12% APR loan you have roughly 30 days before accrued interest pushes you past the liquidation threshold.",
+      `Optional LTV cap (1..${USDC_USDC_MAX_ORIGINATION_LTV_BPS}) for the USDC/USDC credit line. Default 9500 (95%) — the conservative origination ceiling with ~5% headroom for interest accrual before liquidation. Values 9501..${USDC_USDC_MAX_ORIGINATION_LTV_BPS} enable the aggressive mode, only safe for short-duration loans that you repay on a tight cadence: at ${USDC_USDC_MAX_ORIGINATION_LTV_BPS} with a 12% APR loan you have roughly 30 days before accrued interest pushes you past the liquidation threshold.`,
     ),
   /** Optional agent id override — the CLI persists this in `.floe-agent.json`, so most callers don't need to supply it. */
   agentId: z.number().int().positive().optional().describe(

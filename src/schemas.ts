@@ -532,7 +532,7 @@ export const InstantBorrowSchema = z.object({
     .string()
     .default("8000")
     .describe(
-      "Minimum LTV in basis points (default: 8000 = 80%). For agents pushing the USDC/USDC market up to 99% LTV, set this to '9900'. Same-token markets require only a 50bps gap to the lender's maxLtvBps; volatile markets require 800bps.",
+      "Minimum LTV in basis points (default: 8000 = 80%). To match a lender, this value plus the protocol gap (50bps for same-token markets, 800bps for volatile markets) must be ≤ the lender's max_ltv_bps. The aggressive USDC/USDC opt-in lets lenders post up to 9900 max_ltv_bps, which means a borrower can request up to 9850 here and still match. Don't go higher unless you know there's an external lender at the 9950 protocol ceiling.",
     ),
   onBehalfOf: AddressSchema
     .optional()
