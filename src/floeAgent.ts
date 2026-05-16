@@ -18,15 +18,23 @@
 
 const DEFAULT_BASE_URL = "https://credit-api.floelabs.xyz";
 const DEFAULT_TIMEOUT_MS = 15_000;
+const MAX_IDEMPOTENCY_KEY_LENGTH = 255;
 const USDC_DECIMALS = 6;
-const USDC_SCALE = 1_000_000;
+const USDC_SCALE = 10 ** USDC_DECIMALS;
 
-/** Convert a raw USDC integer string (6 decimals) to a dollar number. */
+/**
+ * Convert a raw USDC integer string (6 decimals) to a dollar number.
+ *
+ * Display-quality precision only. `Number(raw)` is exact up to
+ * `Number.MAX_SAFE_INTEGER` raw units, i.e. roughly $9.0 × 10^9 of USDC.
+ * Real-world agent balances fall well below that ceiling, so this is fine
+ * for showing dollars. Anything that needs settlement-grade precision
+ * (e.g. on-chain math, accounting reconciliation) should keep using the
+ * raw integer strings on `FetchResult.costRaw` / `BalanceResult.raw.*Raw`
+ * and never round-trip through this function.
+ */
 function rawToDollars(raw: string | null | undefined): number {
   if (!raw) return 0;
-  // String math first to avoid float precision loss on amounts > $9_007_199.
-  // For balances under that ceiling, dividing the BigInt by the scale is exact
-  // enough for display; agents typically deal in cents and sub-cents.
   const n = Number(raw);
   if (!Number.isFinite(n)) return 0;
   return n / USDC_SCALE;
@@ -117,9 +125,15 @@ export class FloeAgent {
         "FloeAgent: apiKey must be a `floe_…` runtime key (mint one with `floe-agent register`).",
       );
     }
+    const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      throw new Error(
+        `FloeAgent: timeoutMs must be a finite positive number (got ${String(config.timeoutMs)}).`,
+      );
+    }
     this.apiKey = config.apiKey;
     this.baseUrl = (config.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
-    this.timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.timeoutMs = timeoutMs;
   }
 
   /**
@@ -134,7 +148,15 @@ export class FloeAgent {
       typeof input === "string" ? { url: input } : input;
 
     const headers: Record<string, string> = {};
-    if (opts.idempotencyKey) headers["Idempotency-Key"] = opts.idempotencyKey;
+    if (opts.idempotencyKey !== undefined) {
+      if (opts.idempotencyKey.length === 0 || opts.idempotencyKey.length > MAX_IDEMPOTENCY_KEY_LENGTH) {
+        throw new FloeAgentError(
+          `idempotencyKey must be 1..${MAX_IDEMPOTENCY_KEY_LENGTH} characters (got ${opts.idempotencyKey.length}).`,
+          400,
+        );
+      }
+      headers["Idempotency-Key"] = opts.idempotencyKey;
+    }
 
     const resp = await this.request("POST", "/v1/proxy/fetch", {
       url: opts.url,
@@ -286,10 +308,16 @@ export class FloeAgent {
         body: body === undefined ? undefined : JSON.stringify(body),
       });
     } catch (e) {
+      if (e instanceof FloeAgentError) throw e;
       if (e instanceof Error && e.name === "AbortError") {
         throw new FloeAgentError(`Request timed out after ${this.timeoutMs}ms`, 408);
       }
-      throw e;
+      // Network failures (DNS resolution, connection refused, socket reset)
+      // and any other transport-layer exception. Surface as a typed error
+      // so callers can branch on FloeAgentError uniformly instead of
+      // type-sniffing the raw exception.
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new FloeAgentError(`Network error contacting Floe: ${msg}`, 0, "network_error", e);
     } finally {
       clearTimeout(timeout);
     }
@@ -311,6 +339,15 @@ export class FloeAgent {
         text,
       );
     }
-    return JSON.parse(text) as T;
+    try {
+      return JSON.parse(text) as T;
+    } catch (e) {
+      throw new FloeAgentError(
+        `${operation} returned ${resp.status} but the body was not valid JSON.`,
+        resp.status,
+        "invalid_response_body",
+        text,
+      );
+    }
   }
 }

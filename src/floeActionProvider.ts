@@ -2626,9 +2626,25 @@ export class FloeActionProvider extends ActionProvider<EvmWalletProvider> {
     try {
       // Auto-select the canonical USDC/USDC market when no marketId is supplied.
       // This is the agent-friendly default — same-token, no oracle dependency,
-      // and the only liquidation path is unpaid interest. Callers who need a
-      // volatile-collateral market (WETH, cbBTC) must pass marketId explicitly.
-      const marketId = (args.marketId ?? BASE_MAINNET_USDC_USDC_MARKET_ID) as `0x${string}`;
+      // and the only liquidation path is unpaid interest. The market ID
+      // constant is mainnet-specific (chainId 8453); on other supported
+      // networks (e.g. Base Sepolia, 84532) the same market does not exist,
+      // so a fallback would silently submit against an invalid market. Force
+      // an explicit marketId in those cases.
+      let marketId: `0x${string}`;
+      if (args.marketId) {
+        marketId = args.marketId as `0x${string}`;
+      } else {
+        const network = walletProvider.getNetwork();
+        if (network.chainId !== "8453") {
+          return (
+            `instant_borrow: marketId is required on chainId ${network.chainId}. ` +
+            `The default USDC/USDC market only exists on Base Mainnet (chainId 8453). ` +
+            `Pass marketId explicitly or call get_markets to look one up.`
+          );
+        }
+        marketId = BASE_MAINNET_USDC_USDC_MARKET_ID as `0x${string}`;
+      }
       const borrowAmount = BigInt(args.borrowAmount);
       const maxInterestRateBps = BigInt(args.maxInterestRateBps);
       const minLtvBps = BigInt(args.minLtvBps);
