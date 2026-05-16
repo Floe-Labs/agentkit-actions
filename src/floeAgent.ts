@@ -40,7 +40,7 @@ function rawToDollars(raw: string | null | undefined): number {
   return n / USDC_SCALE;
 }
 
-export interface FloeAgentConfig {
+export interface FloeAgentClientConfig {
   /** Agent runtime key (`floe_*`) minted by `floe-agent register` or the dashboard. */
   apiKey: string;
   /** Optional override; defaults to the Floe production credit API. */
@@ -119,7 +119,7 @@ export class FloeAgent {
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
 
-  constructor(config: FloeAgentConfig) {
+  constructor(config: FloeAgentClientConfig) {
     if (!config.apiKey?.startsWith("floe_")) {
       throw new Error(
         "FloeAgent: apiKey must be a `floe_…` runtime key (mint one with `floe-agent register`).",

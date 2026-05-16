@@ -70,7 +70,7 @@ export const OpenCreditLineSchema = z.object({
     .max(USDC_USDC_MAX_ORIGINATION_LTV_BPS)
     .default(9500)
     .describe(
-      `Optional LTV cap (1..${USDC_USDC_MAX_ORIGINATION_LTV_BPS}) for the USDC/USDC credit line. Default 9500 (95%) — the conservative origination ceiling with ~5% headroom for interest accrual before liquidation. Values 9501..${USDC_USDC_MAX_ORIGINATION_LTV_BPS} enable the aggressive mode, only safe for short-duration loans that you repay on a tight cadence: at ${USDC_USDC_MAX_ORIGINATION_LTV_BPS} with a 12% APR loan you have roughly 30 days before accrued interest pushes you past the liquidation threshold.`,
+      `Optional LTV cap (1..${USDC_USDC_MAX_ORIGINATION_LTV_BPS}) for the USDC/USDC credit line. Default 9500 (95%) — the conservative origination ceiling with ~5% headroom for interest accrual before liquidation. Values 9501..${USDC_USDC_MAX_ORIGINATION_LTV_BPS} enable the aggressive mode, only safe for short-duration loans that you repay on a tight cadence: at ${USDC_USDC_MAX_ORIGINATION_LTV_BPS} with a 12% APR loan there is only 50bps of headroom to the 9950bps liquidation threshold, which interest closes in roughly 15 days.`,
     ),
   /** Optional agent id override — the CLI persists this in `.floe-agent.json`, so most callers don't need to supply it. */
   agentId: z.number().int().positive().optional().describe(

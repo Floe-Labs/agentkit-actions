@@ -25,7 +25,7 @@ export {
   FloeAgentError,
 } from "./floeAgent.js";
 export type {
-  FloeAgentConfig,
+  FloeAgentClientConfig,
   X402FetchInput,
   FetchResult,
   X402FetchResult, // deprecated alias for FetchResult
