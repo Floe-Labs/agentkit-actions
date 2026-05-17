@@ -511,9 +511,11 @@ export const RenewCreditLineSchema = z.object({
 // ── v2 Credit Actions (SDK-backed) ──────────────────────────────────────
 
 export const InstantBorrowSchema = z.object({
-  marketId: Bytes32Schema.describe(
-    "The market ID (loan token + collateral token pair).",
-  ),
+  marketId: Bytes32Schema
+    .optional()
+    .describe(
+      "The market ID (loan token + collateral token pair). Optional — omit to use the canonical USDC/USDC same-token market on Base Mainnet, which is the recommended default for agents (no price risk, only interest-accrual liquidation). Pass an explicit market ID only when you want to borrow against a volatile collateral such as WETH or cbBTC. See developers/networks.md for the full market list.",
+    ),
   borrowAmount: z
     .string()
     .describe("Amount to borrow in raw token units."),
@@ -529,7 +531,9 @@ export const InstantBorrowSchema = z.object({
   minLtvBps: z
     .string()
     .default("8000")
-    .describe("Minimum LTV in basis points (default: 8000 = 80%)."),
+    .describe(
+      "Minimum LTV in basis points (default: 8000 = 80%). To match a lender, this value plus the protocol gap (50bps for same-token markets, 800bps for volatile markets) must be ≤ the lender's max_ltv_bps. The aggressive USDC/USDC opt-in lets lenders post up to 9900 max_ltv_bps, which means a borrower can request up to 9850 here and still match. Don't go higher unless you know there's an external lender at the 9950 protocol ceiling.",
+    ),
   onBehalfOf: AddressSchema
     .optional()
     .describe(
