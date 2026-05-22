@@ -355,8 +355,12 @@ export class FloeAgent {
   async awaitSettlement(nonce: string, opts: AwaitSettlementOptions = {}): Promise<ReservationStatus> {
     const intervalMs = opts.intervalMs ?? 2_000;
     const timeoutMs = opts.timeoutMs ?? 15 * 60_000;
-    if (intervalMs <= 0) throw new Error("awaitSettlement: intervalMs must be > 0");
-    if (timeoutMs <= 0) throw new Error("awaitSettlement: timeoutMs must be > 0");
+    if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
+      throw new Error("awaitSettlement: intervalMs must be a finite number > 0");
+    }
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      throw new Error("awaitSettlement: timeoutMs must be a finite number > 0");
+    }
 
     const deadline = Date.now() + timeoutMs;
     // Loop until terminal, timeout, or external abort. We poll a small
@@ -398,15 +402,16 @@ export class FloeAgent {
           reject(opts.signal.reason ?? new Error("aborted"));
           return;
         }
-        const timer = setTimeout(resolve, Math.min(intervalMs, remaining));
-        opts.signal?.addEventListener?.(
-          "abort",
-          () => {
-            clearTimeout(timer);
-            reject(opts.signal!.reason ?? new Error("aborted"));
-          },
-          { once: true },
-        );
+        const onAbort = () => {
+          clearTimeout(timer);
+          opts.signal?.removeEventListener?.("abort", onAbort);
+          reject(opts.signal!.reason ?? new Error("aborted"));
+        };
+        const timer = setTimeout(() => {
+          opts.signal?.removeEventListener?.("abort", onAbort);
+          resolve();
+        }, Math.min(intervalMs, remaining));
+        opts.signal?.addEventListener?.("abort", onAbort, { once: true });
       });
     }
   }

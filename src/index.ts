@@ -13,6 +13,7 @@ export {
   CheckCreditDelegationSchema,
   X402FetchSchema,
   X402GetBalanceSchema,
+  X402AwaitSettlementSchema,
   X402GetTransactionsSchema,
 } from "./x402ActionProvider.js";
 export type { FloeConfig } from "./types.js";

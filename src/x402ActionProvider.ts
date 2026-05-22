@@ -707,6 +707,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
         creditAvailableRaw?: string;
         walletUsdcRaw?: string | null;
         pendingSettlementsRaw?: string;
+        pendingSettlements?: string;
         heldUnspentRaw?: string;
         activeLoans?: Array<{ loanId: string; principalRaw?: string }>;
         delegationActive?: boolean;
@@ -715,7 +716,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
       const usdcDecimals = 6;
       const spendableRaw = data.spendableRaw ?? data.balance ?? "0";
       const creditAvailableRaw = data.creditAvailableRaw ?? data.creditAvailable ?? "0";
-      const pendingRaw = data.pendingSettlementsRaw ?? "0";
+      const pendingRaw = data.pendingSettlementsRaw ?? data.pendingSettlements ?? "0";
 
       const fmt = (raw: string) => formatTokenAmount(BigInt(raw || "0"), usdcDecimals, "USDC");
       const lines = [
@@ -725,6 +726,9 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
       ];
       if (data.walletUsdcRaw !== undefined && data.walletUsdcRaw !== null) {
         lines.push(`**Wallet USDC (on-chain)**: ${fmt(data.walletUsdcRaw)}`);
+      }
+      if (data.heldUnspentRaw && data.heldUnspentRaw !== "0") {
+        lines.push(`**Held unspent**: ${fmt(data.heldUnspentRaw)} — reserved but not yet settled.`);
       }
       lines.push(
         `**Credit Limit**: ${fmt(data.creditLimit)}`,
