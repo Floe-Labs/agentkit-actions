@@ -95,6 +95,30 @@ export const X402FetchSchema = z.object({
 
 export const X402GetBalanceSchema = z.object({});
 
+export const X402AwaitSettlementSchema = z.object({
+  nonce: z
+    .string()
+    .min(1)
+    .max(200)
+    .describe(
+      "Reservation nonce returned in the 502 body when x402_fetch failed with " +
+        "`upstream_paid_request_failed_ambiguous`. The settlement helper polls until " +
+        "the reservation reaches a terminal state (settled | payment_rejected | expired_unsettled).",
+    ),
+  intervalSeconds: z
+    .number()
+    .positive()
+    .max(60)
+    .default(2)
+    .describe("Polling interval in seconds (default 2)."),
+  timeoutSeconds: z
+    .number()
+    .positive()
+    .max(3600)
+    .default(900)
+    .describe("Maximum time to wait in seconds before giving up (default 900 = 15 min)."),
+});
+
 export const X402GetTransactionsSchema = z.object({
   limit: z.string().default("20").describe("Number of transactions to return"),
 });
@@ -608,13 +632,24 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
 
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({ error: resp.statusText }));
-        const errorObj = err as { error?: string };
+        const errorObj = err as { error?: string; detail?: string; reservation?: { nonce?: string; validBefore?: number } };
         const errorMap: Record<string, string> = {
           funding_in_progress: "Funding in progress — the facilitator is borrowing funds. Retry in 30 seconds.",
           credit_frozen: "Credit frozen — your collateral health ratio is too low.",
           insufficient_balance: "Insufficient credit — your credit line is fully utilized.",
           account_closed: "Account closed — no further payments.",
         };
+        // FLO-567: a 502 ambiguous response carries the reservation nonce.
+        // Surface it so the LLM can call `x402_await_settlement` to resolve
+        // the in-flight state, instead of retrying (which would double-charge).
+        if (errorObj.error === "upstream_paid_request_failed_ambiguous" && errorObj.reservation?.nonce) {
+          return [
+            "Payment is in-flight but the upstream response is ambiguous (HTTP 502). ",
+            "DO NOT retry — that may double-charge. Use `x402_await_settlement` with this nonce to resolve:\n",
+            `**nonce**: \`${errorObj.reservation.nonce}\``,
+            errorObj.detail ? `\n\n_Detail: ${errorObj.detail}_` : "",
+          ].join("");
+        }
         return errorMap[errorObj.error ?? ""] ?? `Facilitator error: ${errorObj.error ?? resp.statusText}`;
       }
 
@@ -645,7 +680,9 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
   @CreateAction({
     name: "x402_get_balance",
     description:
-      "Check your x402 credit status — available credit, active loans, health ratio, and next rollover date.",
+      "Check your x402 credit status: spendable USDC (what you can pay with right now), " +
+      "borrowing headroom (how much more you could draw from your credit line), " +
+      "on-chain wallet USDC, active loans, and delegation state.",
     schema: X402GetBalanceSchema,
   })
   async x402GetBalance(
@@ -660,27 +697,143 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
       }
 
       const data = (await resp.json()) as {
+        // Legacy fields (kept by facilitator for back-compat).
+        balance?: string;
         creditLimit: string;
         creditUsed: string;
         creditAvailable: string;
-        activeLoans: Array<{ loanId: string; principalRaw?: string }>;
-        delegationActive: boolean;
-        privyWalletBalance: string;
-        privyWalletAddress: string;
+        // FLO-567 explicit fields.
+        spendableRaw?: string;
+        creditAvailableRaw?: string;
+        walletUsdcRaw?: string | null;
+        pendingSettlementsRaw?: string;
+        pendingSettlements?: string;
+        heldUnspentRaw?: string;
+        activeLoans?: Array<{ loanId: string; principalRaw?: string }>;
+        delegationActive?: boolean;
       };
 
       const usdcDecimals = 6;
-      return [
+      const spendableRaw = data.spendableRaw ?? data.balance ?? "0";
+      const creditAvailableRaw = data.creditAvailableRaw ?? data.creditAvailable ?? "0";
+      const pendingRaw = data.pendingSettlementsRaw ?? data.pendingSettlements ?? "0";
+
+      const fmt = (raw: string) => formatTokenAmount(BigInt(raw || "0"), usdcDecimals, "USDC");
+      const lines = [
         "## x402 Credit Status\n",
-        `**Credit Limit**: ${formatTokenAmount(BigInt(data.creditLimit || "0"), usdcDecimals, "USDC")}`,
-        `**Credit Used**: ${formatTokenAmount(BigInt(data.creditUsed || "0"), usdcDecimals, "USDC")}`,
-        `**Credit Available**: ${formatTokenAmount(BigInt(data.creditAvailable || "0"), usdcDecimals, "USDC")}`,
+        `**Spendable now**: ${fmt(spendableRaw)} — what you can pay with right now.`,
+        `**Borrowing headroom**: ${fmt(creditAvailableRaw)} — how much more you could draw from your credit line.`,
+      ];
+      if (data.walletUsdcRaw !== undefined && data.walletUsdcRaw !== null) {
+        lines.push(`**Wallet USDC (on-chain)**: ${fmt(data.walletUsdcRaw)}`);
+      }
+      if (data.heldUnspentRaw && data.heldUnspentRaw !== "0") {
+        lines.push(`**Held unspent**: ${fmt(data.heldUnspentRaw)} — reserved but not yet settled.`);
+      }
+      lines.push(
+        `**Credit Limit**: ${fmt(data.creditLimit)}`,
+        `**Credit Used**: ${fmt(data.creditUsed)}`,
+      );
+      if (pendingRaw !== "0") {
+        lines.push(`**Pending settlement**: ${fmt(pendingRaw)} — use \`x402_await_settlement\` to resolve.`);
+      }
+      lines.push(
         `**Active Loans**: ${data.activeLoans?.length ?? 0}`,
         `**Delegation Active**: ${data.delegationActive ? "Yes" : "No"}`,
-      ].join("\n");
+      );
+      return lines.join("\n");
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") return "Request timed out.";
       return `Error fetching balance: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  // ── x402_await_settlement ───────────────────────────────────────────────
+  //
+  // FLO-567: when `x402_fetch` returns a 502 `upstream_paid_request_failed_ambiguous`,
+  // the reservation is in `pending_settlement` and gets resolved by background
+  // reconciliation. This action polls the per-reservation endpoint until it
+  // reaches a terminal state (settled | payment_rejected | expired_unsettled).
+
+  @CreateAction({
+    name: "x402_await_settlement",
+    description:
+      "Poll the facilitator until a pending x402 reservation reaches a terminal state. " +
+      "Use this AFTER an `x402_fetch` call returned a 502 ambiguous error with a nonce — " +
+      "do NOT retry the original call (that may double-charge). Resolves with the final " +
+      "state: settled (paid on-chain), payment_rejected (credit released), or " +
+      "expired_unsettled (authorization expired; treat as may-or-may-not have charged).",
+    schema: X402AwaitSettlementSchema,
+  })
+  async x402AwaitSettlement(
+    walletProvider: EvmWalletProvider,
+    args: z.infer<typeof X402AwaitSettlementSchema>,
+  ): Promise<string> {
+    // Honor the caller's requested timeout even when smaller than the
+    // polling interval — the in-loop Math.min(intervalMs, remaining)
+    // already caps each sleep so we never overshoot the deadline.
+    const intervalMs = Math.max(100, Math.floor(args.intervalSeconds * 1000));
+    const timeoutMs = Math.max(100, Math.floor(args.timeoutSeconds * 1000));
+    const deadline = Date.now() + timeoutMs;
+
+    try {
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const resp = await this.facilitatorFetch(
+          `/agents/reservations/${encodeURIComponent(args.nonce)}`,
+        );
+        if (resp.status === 404) {
+          return `Reservation \`${args.nonce}\` not found. Verify the nonce belongs to this agent and was issued recently.`;
+        }
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({ error: resp.statusText }));
+          return `Error polling reservation: ${(err as { error?: string }).error ?? resp.statusText}`;
+        }
+        const status = (await resp.json()) as {
+          nonce: string;
+          state: string;
+          terminal: boolean;
+          txHash: string | null;
+          paymentAmountRaw: string;
+          settledAt: string | null;
+        };
+        if (status.terminal) {
+          // State-aware heading so a `payment_rejected` or `expired_unsettled`
+          // outcome doesn't read as a successful settlement to the LLM.
+          const heading =
+            status.state === "settled"
+              ? "## Reservation settled"
+              : status.state === "payment_rejected"
+                ? "## Reservation rejected (credit released)"
+                : status.state === "expired_unsettled"
+                  ? "## Reservation expired (may or may not have charged upstream)"
+                  : `## Reservation ${status.state}`;
+          const lines = [
+            `${heading}\n`,
+            `**State**: \`${status.state}\``,
+            `**Nonce**: \`${status.nonce}\``,
+            `**Amount**: ${formatTokenAmount(BigInt(status.paymentAmountRaw || "0"), 6, "USDC")}`,
+          ];
+          if (status.txHash) lines.push(`**Tx**: \`${status.txHash}\``);
+          if (status.settledAt) lines.push(`**Settled at**: ${status.settledAt}`);
+          return lines.join("\n");
+        }
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) {
+          return `Timed out after ${args.timeoutSeconds}s waiting for reservation \`${args.nonce}\` to settle (last state: \`${status.state}\`). Call this action again to resume waiting.`;
+        }
+        await new Promise((r) => setTimeout(r, Math.min(intervalMs, remaining)));
+      }
+    } catch (e) {
+      // Mirror the other x402 actions: a transient facilitator/network
+      // failure during polling should return a re-try hint rather than
+      // throwing out of the tool call, so the agent can call this action
+      // again with the same nonce instead of dropping the in-flight state.
+      if (e instanceof Error && e.name === "AbortError") {
+        return `Facilitator request timed out while polling reservation \`${args.nonce}\`. Call this action again to resume waiting.`;
+      }
+      const msg = e instanceof Error ? e.message : String(e);
+      return `Error polling reservation \`${args.nonce}\`: ${msg}. Call this action again to resume waiting.`;
     }
   }
 
