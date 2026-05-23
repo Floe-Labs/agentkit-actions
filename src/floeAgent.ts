@@ -206,7 +206,7 @@ export class FloeAgent {
    * Pass a URL string for the simple case, or an object for advanced
    * options (HTTP method, headers, body, idempotency key).
    */
-  async fetch(input: string | X402FetchInput): Promise<FetchResult> {
+  async fetch(input: string | X402FetchInput, _retryCount = 0): Promise<FetchResult> {
     const opts: X402FetchInput =
       typeof input === "string" ? { url: input } : input;
 
@@ -221,12 +221,14 @@ export class FloeAgent {
       headers["Idempotency-Key"] = opts.idempotencyKey;
     }
 
-    const resp = await this.request("POST", "/v1/proxy/fetch", {
+    const payload: Record<string, unknown> = {
       url: opts.url,
       method: opts.method ?? "GET",
-      headers: opts.headers,
-      body: opts.body,
-    }, headers);
+    };
+    if (opts.headers !== undefined) payload.headers = opts.headers;
+    if (opts.body !== undefined) payload.body = opts.body;
+
+    const resp = await this.request("POST", "/v1/proxy/fetch", payload, headers);
 
     const responseHeaders: Record<string, string> = {};
     resp.headers.forEach((v, k) => {
@@ -236,7 +238,7 @@ export class FloeAgent {
     const body = await resp.text();
 
     if (!resp.ok) {
-      let parsed: { error?: string; detail?: string; reservation?: { nonce?: string; validBefore?: number } } = {};
+      let parsed: { error?: string; detail?: string; retry_after_seconds?: number; reservation?: { nonce?: string; validBefore?: number } } = {};
       let parsedOk = false;
       try {
         parsed = JSON.parse(body) as typeof parsed;
@@ -244,6 +246,19 @@ export class FloeAgent {
       } catch {
         // non-JSON error body — keep as-is
       }
+
+      // Auto-borrow retry: server is topping up the credit line. Wait and
+      // retry up to 2 times before giving up.
+      if (
+        resp.status === 402 &&
+        parsed.error === "auto_borrow_in_progress" &&
+        _retryCount < 2
+      ) {
+        const delaySec = parsed.retry_after_seconds ?? 10;
+        await new Promise((r) => setTimeout(r, delaySec * 1000));
+        return this.fetch(input, _retryCount + 1);
+      }
+
       // `detail` stays the raw body string for back-compat. `body` carries
       // the parsed JSON when available so callers can read structured
       // fields like `err.body.reservation.nonce` after a 502 ambiguous
