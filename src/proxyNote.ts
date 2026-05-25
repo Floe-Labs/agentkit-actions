@@ -15,9 +15,11 @@
 export function buildProxyResponseNote(headers: Headers, body: string): string {
   const paymentTx = headers.get("payment-response") || headers.get("x-payment-response");
   const costRaw = headers.get("x-floe-cost-usdc");
-  const paidAmount =
-    headers.get("x-floe-payment-amount") ??
-    (costRaw ? (Number(costRaw) / 1_000_000).toFixed(6) : null);
+  const paidAmountFromRaw =
+    costRaw && /^\d+$/.test(costRaw)
+      ? `${costRaw.slice(0, -6) || "0"}.${costRaw.slice(-6).padStart(6, "0")}`
+      : null;
+  const paidAmount = headers.get("x-floe-payment-amount") ?? paidAmountFromRaw;
 
   const lines = ["## Response\n"];
   if (paymentTx || paidAmount) {
