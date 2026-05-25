@@ -221,51 +221,75 @@ export class FloeAgent {
       headers["Idempotency-Key"] = opts.idempotencyKey;
     }
 
-    const resp = await this.request("POST", "/v1/proxy/fetch", {
+    const payload: Record<string, unknown> = {
       url: opts.url,
       method: opts.method ?? "GET",
-      headers: opts.headers,
-      body: opts.body,
-    }, headers);
-
-    const responseHeaders: Record<string, string> = {};
-    resp.headers.forEach((v, k) => {
-      responseHeaders[k] = v;
-    });
-
-    const body = await resp.text();
-
-    if (!resp.ok) {
-      let parsed: { error?: string; detail?: string; reservation?: { nonce?: string; validBefore?: number } } = {};
-      let parsedOk = false;
-      try {
-        parsed = JSON.parse(body) as typeof parsed;
-        parsedOk = true;
-      } catch {
-        // non-JSON error body — keep as-is
-      }
-      // `detail` stays the raw body string for back-compat. `body` carries
-      // the parsed JSON when available so callers can read structured
-      // fields like `err.body.reservation.nonce` after a 502 ambiguous
-      // and hand it to `awaitSettlement(nonce)`.
-      throw new FloeAgentError(
-        parsed.detail ?? parsed.error ?? `fetch failed: ${resp.status}`,
-        resp.status,
-        parsed.error,
-        body,
-        parsedOk ? parsed : undefined,
-      );
-    }
-
-    const costRaw = responseHeaders["x-floe-cost-usdc"];
-    return {
-      status: resp.status,
-      headers: responseHeaders,
-      body,
-      cost: rawToDollars(costRaw),
-      costRaw: costRaw ?? undefined,
-      idempotentReplay: responseHeaders["x-floe-idempotent-replay"] === "true",
     };
+    if (opts.headers !== undefined) payload.headers = opts.headers;
+    if (opts.body !== undefined) payload.body = opts.body;
+
+    const maxAutoBorrowRetries = 2;
+    for (let attempt = 0; attempt <= maxAutoBorrowRetries; attempt++) {
+      const resp = await this.request("POST", "/v1/proxy/fetch", payload, headers);
+
+      const responseHeaders: Record<string, string> = {};
+      resp.headers.forEach((v, k) => {
+        responseHeaders[k] = v;
+      });
+
+      const body = await resp.text();
+
+      if (!resp.ok) {
+        let parsed: { error?: string; detail?: string; retry_after_seconds?: number; reservation?: { nonce?: string; validBefore?: number } } = {};
+        let parsedOk = false;
+        try {
+          parsed = JSON.parse(body) as typeof parsed;
+          parsedOk = true;
+        } catch {
+          // non-JSON error body — keep as-is
+        }
+
+        // Auto-borrow retry: server is topping up the credit line. Wait
+        // and retry before giving up.
+        if (
+          resp.status === 402 &&
+          parsedOk &&
+          typeof parsed === "object" &&
+          parsed !== null &&
+          parsed.error === "auto_borrow_in_progress" &&
+          attempt < maxAutoBorrowRetries
+        ) {
+          const raw = parsed.retry_after_seconds;
+          const delaySec = Math.min(Math.max(Number(raw) || 10, 1), 60);
+          await new Promise((r) => setTimeout(r, delaySec * 1000));
+          continue;
+        }
+
+        // `detail` stays the raw body string for back-compat. `body` carries
+        // the parsed JSON when available so callers can read structured
+        // fields like `err.body.reservation.nonce` after a 502 ambiguous
+        // and hand it to `awaitSettlement(nonce)`.
+        throw new FloeAgentError(
+          parsed.detail ?? parsed.error ?? `fetch failed: ${resp.status}`,
+          resp.status,
+          parsed.error,
+          body,
+          parsedOk ? parsed : undefined,
+        );
+      }
+
+      const costRaw = responseHeaders["x-floe-cost-usdc"];
+      return {
+        status: resp.status,
+        headers: responseHeaders,
+        body,
+        cost: rawToDollars(costRaw),
+        costRaw: costRaw ?? undefined,
+        idempotentReplay: responseHeaders["x-floe-idempotent-replay"] === "true",
+      };
+    }
+    // Unreachable — the loop always returns or throws.
+    throw new FloeAgentError("auto-borrow retries exhausted", 402);
   }
 
   /** @deprecated Use `fetch` — same behavior, friendlier name. */
