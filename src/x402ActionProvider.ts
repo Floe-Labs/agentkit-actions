@@ -12,6 +12,7 @@ import {
 } from "./constants.js";
 import type { Address } from "./types.js";
 import { formatBps, formatTokenAmount, formatAddress, formatDuration } from "./utils.js";
+import { buildProxyResponseNote } from "./proxyNote.js";
 
 // ── Schemas ─────────────────────────────────────────────────────────────────
 
@@ -658,15 +659,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
         ? JSON.stringify(await resp.json(), null, 2)
         : await resp.text();
 
-      const paymentTx = resp.headers.get("payment-response") || resp.headers.get("x-payment-response");
-
-      const lines = ["## Response\n"];
-      if (paymentTx) {
-        lines.push(`*Paid via x402 — tx: ${paymentTx}*\n`);
-      }
-      lines.push("```", body.slice(0, 4000), "```");
-
-      return lines.join("\n");
+      return buildProxyResponseNote(resp.headers, body);
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") {
         return "Facilitator request timed out. Retry later.";
