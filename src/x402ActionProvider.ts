@@ -532,6 +532,20 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
         data,
       });
 
+      // Confirm the revocation landed on-chain (parity with the PY SDK):
+      // a fire-and-forget tx hash would let a silently-reverted revoke
+      // read as success while the facilitator can still borrow.
+      const agentAddress = await walletProvider.getAddress();
+      const perm = (await walletProvider.readContract({
+        address: this.matcherAddress,
+        abi: OPERATOR_ABI,
+        functionName: "getOperatorPermission",
+        args: [agentAddress as `0x${string}`, args.facilitatorAddress as `0x${string}`],
+      })) as { approved: boolean };
+      if (perm.approved) {
+        return `Warning: revokeOperator tx sent (${txHash}) but the delegation still shows approved. It may not have confirmed yet — re-check with \`check_credit_delegation\`.`;
+      }
+
       return [
         "## Credit Delegation Revoked\n",
         `**Facilitator**: ${formatAddress(args.facilitatorAddress)}`,
