@@ -89,7 +89,7 @@ export async function main(args: string[]): Promise<void> {
     const facilitatorUrl =
       parseFlag(rest, "facilitator-url") ||
       process.env.FLOE_FACILITATOR_URL ||
-      "https://x402.floe.xyz";
+      "https://credit-api.floelabs.xyz";
     await runRegisterCommand({
       name,
       facilitatorUrl,

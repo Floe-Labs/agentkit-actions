@@ -38,7 +38,7 @@ export const GrantCreditDelegationSchema = z.object({
     .string()
     .url()
     .refine((u) => u.startsWith("https://"), "Must use HTTPS")
-    .describe("The facilitator API base URL (e.g. https://x402.floe.xyz)"),
+    .describe("The facilitator API base URL (e.g. https://credit-api.floelabs.xyz)"),
   borrowLimit: NonNegIntString.describe("Maximum borrow limit in USDC (e.g. '10000' for $10K)"),
   maxRateBps: NonNegIntString.default("1500")
     .refine((v) => BigInt(v) <= 10000n, "Must be <= 10000 basis points")
@@ -61,7 +61,7 @@ export const OpenCreditLineSchema = z.object({
     .string()
     .url()
     .refine((u) => u.startsWith("https://"), "Must use HTTPS")
-    .describe("The facilitator API base URL (e.g. https://x402.floe.xyz)"),
+    .describe("The facilitator API base URL (e.g. https://credit-api.floelabs.xyz)"),
   /** The Privy wallet's USDC deposit, e.g. "10000" for $10K. Borrow amount = deposit * maxLtvBps / 10000. */
   depositUsdc: NonNegIntString.describe("USDC deposit amount (e.g. '10000' for $10K)"),
   maxLtvBps: z
