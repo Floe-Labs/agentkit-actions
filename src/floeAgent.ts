@@ -463,16 +463,15 @@ export class FloeAgent {
     canAfford: boolean;
     isPaid: boolean;
   }> {
-    const qs = new URLSearchParams({ url, method });
-    const resp = await this.request("GET", `/v1/x402/estimate?${qs.toString()}`);
+    const resp = await this.request("POST", "/v1/x402/estimate", { url, method });
     const data = await this.parseJson<{
-      costRaw: string | null;
-      willExceedAvailable: boolean;
+      priceRaw: string | null;
       x402: boolean;
+      reflection?: { willExceedAvailable: boolean };
     }>(resp, "estimate_cost");
     return {
-      cost: rawToDollars(data.costRaw),
-      canAfford: !data.willExceedAvailable,
+      cost: rawToDollars(data.priceRaw ?? null),
+      canAfford: !(data.reflection?.willExceedAvailable ?? false),
       isPaid: data.x402,
     };
   }
