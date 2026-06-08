@@ -1400,6 +1400,27 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     _walletProvider: EvmWalletProvider,
     args: z.infer<typeof AddAllowlistEntrySchema>,
   ): Promise<string> {
+    // Kind-aware cross-field validation: the flat schema allows incoherent
+    // combos (e.g. a vendor entry whose matchKey is a hostname, or an api
+    // entry asking for the 'recipient' matcher). Reject those before the
+    // round-trip. Reuse the existing AddressSchema for the payee check.
+    if (args.kind === "vendor") {
+      if (!AddressSchema.safeParse(args.matchKey).success) {
+        return "Error: kind='vendor' requires matchKey to be a payee wallet address (0x + 40 hex).";
+      }
+      if (args.matchKind !== undefined && args.matchKind !== "recipient") {
+        return "Error: kind='vendor' only supports matchKind='recipient'.";
+      }
+    } else {
+      // kind === 'api' (host entry)
+      if (
+        args.matchKind !== undefined &&
+        args.matchKind !== "host_exact" &&
+        args.matchKind !== "host_suffix"
+      ) {
+        return "Error: kind='api' only supports matchKind='host_exact' or 'host_suffix'.";
+      }
+    }
     try {
       const body: Record<string, unknown> = {
         kind: args.kind,
