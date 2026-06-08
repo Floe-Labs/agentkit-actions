@@ -171,7 +171,7 @@ export const EstimateX402CostSchema = z.object({
     .describe("HTTP method (default GET)."),
 });
 
-// ── Merchant allowlist schemas (D1) ─────────────────────────────────────────
+// ── Merchant allowlist schemas (D1 feature; TS parity, D9) ──────────────────
 // An allowlist "entry" is an ordinary agent policy row (kind='api' for hosts,
 // kind='vendor' for payees) that doubles as "allowed AND capped". The mode flag
 // toggles which proxy gates enforce them. 'off' (the default) = allow any vendor.
@@ -687,7 +687,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     args: z.infer<typeof X402FetchSchema>,
   ): Promise<string> {
     try {
-      const resp = await this.facilitatorFetch("/proxy/fetch", {
+      const resp = await this.facilitatorFetch("/v1/proxy/fetch", {
         method: "POST",
         body: JSON.stringify({
           url: args.url,
@@ -749,7 +749,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     args: z.infer<typeof X402GetBalanceSchema>,
   ): Promise<string> {
     try {
-      const resp = await this.facilitatorFetch("/agents/balance");
+      const resp = await this.facilitatorFetch("/v1/agents/balance");
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({ error: resp.statusText }));
         return `Error: ${(err as { error?: string }).error ?? resp.statusText}`;
@@ -839,7 +839,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
       // eslint-disable-next-line no-constant-condition
       while (true) {
         const resp = await this.facilitatorFetch(
-          `/agents/reservations/${encodeURIComponent(args.nonce)}`,
+          `/v1/agents/reservations/${encodeURIComponent(args.nonce)}`,
         );
         if (resp.status === 404) {
           return `Reservation \`${args.nonce}\` not found. Verify the nonce belongs to this agent and was issued recently.`;
@@ -910,7 +910,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     try {
       const parsed = parseInt(args.limit, 10);
       const limit = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 100) : 20;
-      const resp = await this.facilitatorFetch(`/agents/transactions?limit=${limit}`);
+      const resp = await this.facilitatorFetch(`/v1/agents/transactions?limit=${limit}`);
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({ error: resp.statusText }));
         return `Error: ${(err as { error?: string }).error ?? resp.statusText}`;
@@ -995,7 +995,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     _args: z.infer<typeof GetCreditRemainingSchema>,
   ): Promise<string> {
     try {
-      const resp = await this.facilitatorFetch("/agents/credit-remaining");
+      const resp = await this.facilitatorFetch("/v1/agents/credit-remaining");
       const result = await this.readJsonOrError(resp);
       if (!result.ok) return `Error: ${result.msg}`;
       const d = result.data as {
@@ -1041,7 +1041,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     _args: z.infer<typeof GetLoanStateSchema>,
   ): Promise<string> {
     try {
-      const resp = await this.facilitatorFetch("/agents/loan-state");
+      const resp = await this.facilitatorFetch("/v1/agents/loan-state");
       const result = await this.readJsonOrError(resp);
       if (!result.ok) return `Error: ${result.msg}`;
       const d = result.data as { state: string; reason: string; details?: Record<string, unknown> };
@@ -1070,7 +1070,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     _args: z.infer<typeof GetSpendLimitSchema>,
   ): Promise<string> {
     try {
-      const resp = await this.facilitatorFetch("/agents/spend-limit");
+      const resp = await this.facilitatorFetch("/v1/agents/spend-limit");
       const result = await this.readJsonOrError(resp);
       if (!result.ok) return `Error: ${result.msg}`;
       const d = result.data as {
@@ -1107,7 +1107,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     args: z.infer<typeof SetSpendLimitSchema>,
   ): Promise<string> {
     try {
-      const resp = await this.facilitatorFetch("/agents/spend-limit", {
+      const resp = await this.facilitatorFetch("/v1/agents/spend-limit", {
         method: "PUT",
         body: JSON.stringify({ limitRaw: args.limitRaw }),
       });
@@ -1138,7 +1138,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     _args: z.infer<typeof ClearSpendLimitSchema>,
   ): Promise<string> {
     try {
-      const resp = await this.facilitatorFetch("/agents/spend-limit", { method: "DELETE" });
+      const resp = await this.facilitatorFetch("/v1/agents/spend-limit", { method: "DELETE" });
       const result = await this.readJsonOrError(resp);
       if (!result.ok) return `Error: ${result.msg}`;
       return "## Spend Limit Cleared\n\nNo cap is now active.";
@@ -1162,7 +1162,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     _args: z.infer<typeof ListCreditThresholdsSchema>,
   ): Promise<string> {
     try {
-      const resp = await this.facilitatorFetch("/agents/credit-thresholds");
+      const resp = await this.facilitatorFetch("/v1/agents/credit-thresholds");
       const result = await this.readJsonOrError(resp);
       if (!result.ok) return `Error: ${result.msg}`;
       const d = result.data as {
@@ -1205,7 +1205,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     args: z.infer<typeof RegisterCreditThresholdSchema>,
   ): Promise<string> {
     try {
-      const resp = await this.facilitatorFetch("/agents/credit-thresholds", {
+      const resp = await this.facilitatorFetch("/v1/agents/credit-thresholds", {
         method: "POST",
         body: JSON.stringify({
           thresholdBps: args.thresholdBps,
@@ -1243,7 +1243,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     args: z.infer<typeof DeleteCreditThresholdSchema>,
   ): Promise<string> {
     try {
-      const resp = await this.facilitatorFetch(`/agents/credit-thresholds/${args.id}`, { method: "DELETE" });
+      const resp = await this.facilitatorFetch(`/v1/agents/credit-thresholds/${args.id}`, { method: "DELETE" });
       const result = await this.readJsonOrError(resp);
       if (!result.ok) return `Error: ${result.msg}`;
       return `## Credit Threshold Deleted\n\nThreshold #${args.id} removed.`;
@@ -1268,7 +1268,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     args: z.infer<typeof EstimateX402CostSchema>,
   ): Promise<string> {
     try {
-      const resp = await this.facilitatorFetch("/x402/estimate", {
+      const resp = await this.facilitatorFetch("/v1/x402/estimate", {
         method: "POST",
         body: JSON.stringify({ url: args.url, method: args.method }),
       });
@@ -1347,7 +1347,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     args: z.infer<typeof SetAllowlistModeSchema>,
   ): Promise<string> {
     try {
-      const resp = await this.facilitatorFetch("/agents/allowlist-mode", {
+      const resp = await this.facilitatorFetch("/v1/agents/allowlist-mode", {
         method: "PUT",
         body: JSON.stringify({ mode: args.mode }),
       });
@@ -1374,7 +1374,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     _args: z.infer<typeof GetAllowlistModeSchema>,
   ): Promise<string> {
     try {
-      const resp = await this.facilitatorFetch("/agents/allowlist-mode");
+      const resp = await this.facilitatorFetch("/v1/agents/allowlist-mode");
       const result = await this.readJsonOrError(resp);
       if (!result.ok) return `Error: ${result.msg}`;
       const d = result.data as { mode: string };
@@ -1428,7 +1428,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
         limitRaw: args.limitRaw,
       };
       if (args.matchKind) body.matchKind = args.matchKind;
-      const resp = await this.facilitatorFetch("/agents/policies", {
+      const resp = await this.facilitatorFetch("/v1/agents/policies", {
         method: "POST",
         body: JSON.stringify(body),
       });
@@ -1462,7 +1462,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     args: z.infer<typeof RemoveAllowlistEntrySchema>,
   ): Promise<string> {
     try {
-      const resp = await this.facilitatorFetch(`/agents/policies/${args.policyId}`, {
+      const resp = await this.facilitatorFetch(`/v1/agents/policies/${args.policyId}`, {
         method: "DELETE",
       });
       const result = await this.readJsonOrError(resp);
@@ -1488,7 +1488,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     _args: z.infer<typeof ListAllowlistSchema>,
   ): Promise<string> {
     try {
-      const resp = await this.facilitatorFetch("/agents/policies");
+      const resp = await this.facilitatorFetch("/v1/agents/policies");
       const result = await this.readJsonOrError(resp);
       if (!result.ok) return `Error: ${result.msg}`;
       const d = result.data as {
