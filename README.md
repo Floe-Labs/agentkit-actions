@@ -30,7 +30,7 @@ Two layers in one package:
 
 ## Install
 
-`FloeAgent` (the runtime client) has zero peer dependencies:
+`FloeAgent` (the runtime client) can be used standalone:
 
 ```bash
 npm install floe-agent
@@ -57,11 +57,12 @@ const available = await agent.balance();   // dollars available to spend
 //   const detail = await agent.balanceDetails(); // BalanceResult
 
 // Pay any x402 API. The agent never touches the payment layer.
-const data = await agent.fetch({
+const res = await agent.fetch({
   url: "https://api.exa.ai/search",
   method: "POST",
   body: JSON.stringify({ query: "AI agent frameworks" }),
 });
+// res is a FetchResult: res.body (string), res.cost (USDC dollars), res.status
 ```
 
 **Fund with fiat:** operators fund the wallet with USDC via Coinbase — card,
@@ -113,9 +114,19 @@ workflow: *Do I have budget? Is this call worth it? Where am I in my spend?*
 
 ```typescript
 // Vercel AI SDK (requires: npm install floe-agent @coinbase/agentkit viem zod)
+import { AgentKit } from "@coinbase/agentkit";
 import { getVercelAITools } from "@coinbase/agentkit-vercel-ai-sdk";
 import { generateText } from "ai";
 import { openai } from "@ai-sdk/openai";
+import { floeActionProvider, x402ActionProvider } from "floe-agent";
+
+const agentkit = await AgentKit.from({
+  walletProvider,
+  actionProviders: [
+    floeActionProvider(),
+    x402ActionProvider({ facilitatorApiKey: process.env.FLOE_FACILITATOR_API_KEY }),
+  ],
+});
 
 const tools = await getVercelAITools(agentkit);
 const { text } = await generateText({
@@ -206,7 +217,8 @@ await agentkit.run("instant_borrow", {
 | `post_borrow_intent` | Post a borrow request with collateral |
 | `match_intents` | Match a lend + borrow intent to create a loan |
 | `repay_loan` | Repay fully/partially. Required: `loanId`, `repayAmount` (raw principal). Optional: `slippageBps` (default 5%). Collateral auto-returns same tx. |
-| `add_collateral` / `withdraw_collateral` | Adjust collateral (withdraw enforces safety buffer) |
+| `add_collateral` | Add collateral to improve loan health |
+| `withdraw_collateral` | Withdraw excess collateral (enforces safety buffer) |
 | `liquidate_loan` | Liquidate an unhealthy loan (LTV ≥ threshold or overdue) |
 
 Write actions auto-approve tokens to `LendingIntentMatcher` with a 1% buffer,
