@@ -171,6 +171,58 @@ export const EstimateX402CostSchema = z.object({
     .describe("HTTP method (default GET)."),
 });
 
+// ── Merchant allowlist schemas (D1 feature; TS parity, D9) ──────────────────
+// An allowlist "entry" is an ordinary agent policy row (kind='api' for hosts,
+// kind='vendor' for payees) that doubles as "allowed AND capped". The mode flag
+// toggles which proxy gates enforce them. 'off' (the default) = allow any vendor.
+
+export const SetAllowlistModeSchema = z.object({
+  mode: z
+    .enum(["off", "host", "vendor", "both"])
+    .describe(
+      "Allowlist enforcement mode. 'off' = allow any vendor (default, no friction). " +
+        "'host' = default-deny unlisted hosts pre-fetch. 'vendor' = default-deny unlisted " +
+        "payees pre-sign. 'both' = enforce host AND payee gates.",
+    ),
+});
+
+export const GetAllowlistModeSchema = z.object({});
+
+export const AddAllowlistEntrySchema = z.object({
+  kind: z
+    .enum(["api", "vendor"])
+    .describe(
+      "'api' for a host allowlist entry (matchKey = hostname) or 'vendor' for a payee " +
+        "allowlist entry (matchKey = recipient wallet address).",
+    ),
+  matchKey: z
+    .string()
+    .min(1)
+    .max(255)
+    .describe("Host (for kind='api') or payee wallet address (for kind='vendor')."),
+  limitRaw: z
+    .string()
+    .regex(/^[1-9]\d*$/, "Must be a positive integer (raw USDC, 6 decimals)")
+    .describe("Spend cap for this entry in raw USDC units (6 decimals). e.g. '1000000' = $1."),
+  matchKind: z
+    .enum(["host_exact", "host_suffix", "recipient"])
+    .optional()
+    .describe(
+      "Optional matcher: 'host_exact' | 'host_suffix' (api) or 'recipient' (vendor). " +
+        "Defaults server-side (api → host_suffix, vendor → recipient).",
+    ),
+});
+
+export const RemoveAllowlistEntrySchema = z.object({
+  policyId: z
+    .number()
+    .int()
+    .positive()
+    .describe("Policy id of the allowlist entry (from list_allowlist)."),
+});
+
+export const ListAllowlistSchema = z.object({});
+
 // ── ABI fragments for operator functions ────────────────────────────────────
 
 const OPERATOR_ABI = [
@@ -635,7 +687,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     args: z.infer<typeof X402FetchSchema>,
   ): Promise<string> {
     try {
-      const resp = await this.facilitatorFetch("/proxy/fetch", {
+      const resp = await this.facilitatorFetch("/v1/proxy/fetch", {
         method: "POST",
         body: JSON.stringify({
           url: args.url,
@@ -697,7 +749,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     args: z.infer<typeof X402GetBalanceSchema>,
   ): Promise<string> {
     try {
-      const resp = await this.facilitatorFetch("/agents/balance");
+      const resp = await this.facilitatorFetch("/v1/agents/balance");
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({ error: resp.statusText }));
         return `Error: ${(err as { error?: string }).error ?? resp.statusText}`;
@@ -787,7 +839,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
       // eslint-disable-next-line no-constant-condition
       while (true) {
         const resp = await this.facilitatorFetch(
-          `/agents/reservations/${encodeURIComponent(args.nonce)}`,
+          `/v1/agents/reservations/${encodeURIComponent(args.nonce)}`,
         );
         if (resp.status === 404) {
           return `Reservation \`${args.nonce}\` not found. Verify the nonce belongs to this agent and was issued recently.`;
@@ -858,7 +910,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     try {
       const parsed = parseInt(args.limit, 10);
       const limit = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 100) : 20;
-      const resp = await this.facilitatorFetch(`/agents/transactions?limit=${limit}`);
+      const resp = await this.facilitatorFetch(`/v1/agents/transactions?limit=${limit}`);
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({ error: resp.statusText }));
         return `Error: ${(err as { error?: string }).error ?? resp.statusText}`;
@@ -943,7 +995,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     _args: z.infer<typeof GetCreditRemainingSchema>,
   ): Promise<string> {
     try {
-      const resp = await this.facilitatorFetch("/agents/credit-remaining");
+      const resp = await this.facilitatorFetch("/v1/agents/credit-remaining");
       const result = await this.readJsonOrError(resp);
       if (!result.ok) return `Error: ${result.msg}`;
       const d = result.data as {
@@ -989,7 +1041,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     _args: z.infer<typeof GetLoanStateSchema>,
   ): Promise<string> {
     try {
-      const resp = await this.facilitatorFetch("/agents/loan-state");
+      const resp = await this.facilitatorFetch("/v1/agents/loan-state");
       const result = await this.readJsonOrError(resp);
       if (!result.ok) return `Error: ${result.msg}`;
       const d = result.data as { state: string; reason: string; details?: Record<string, unknown> };
@@ -1018,7 +1070,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     _args: z.infer<typeof GetSpendLimitSchema>,
   ): Promise<string> {
     try {
-      const resp = await this.facilitatorFetch("/agents/spend-limit");
+      const resp = await this.facilitatorFetch("/v1/agents/spend-limit");
       const result = await this.readJsonOrError(resp);
       if (!result.ok) return `Error: ${result.msg}`;
       const d = result.data as {
@@ -1055,7 +1107,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     args: z.infer<typeof SetSpendLimitSchema>,
   ): Promise<string> {
     try {
-      const resp = await this.facilitatorFetch("/agents/spend-limit", {
+      const resp = await this.facilitatorFetch("/v1/agents/spend-limit", {
         method: "PUT",
         body: JSON.stringify({ limitRaw: args.limitRaw }),
       });
@@ -1086,7 +1138,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     _args: z.infer<typeof ClearSpendLimitSchema>,
   ): Promise<string> {
     try {
-      const resp = await this.facilitatorFetch("/agents/spend-limit", { method: "DELETE" });
+      const resp = await this.facilitatorFetch("/v1/agents/spend-limit", { method: "DELETE" });
       const result = await this.readJsonOrError(resp);
       if (!result.ok) return `Error: ${result.msg}`;
       return "## Spend Limit Cleared\n\nNo cap is now active.";
@@ -1110,7 +1162,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     _args: z.infer<typeof ListCreditThresholdsSchema>,
   ): Promise<string> {
     try {
-      const resp = await this.facilitatorFetch("/agents/credit-thresholds");
+      const resp = await this.facilitatorFetch("/v1/agents/credit-thresholds");
       const result = await this.readJsonOrError(resp);
       if (!result.ok) return `Error: ${result.msg}`;
       const d = result.data as {
@@ -1153,7 +1205,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     args: z.infer<typeof RegisterCreditThresholdSchema>,
   ): Promise<string> {
     try {
-      const resp = await this.facilitatorFetch("/agents/credit-thresholds", {
+      const resp = await this.facilitatorFetch("/v1/agents/credit-thresholds", {
         method: "POST",
         body: JSON.stringify({
           thresholdBps: args.thresholdBps,
@@ -1191,7 +1243,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     args: z.infer<typeof DeleteCreditThresholdSchema>,
   ): Promise<string> {
     try {
-      const resp = await this.facilitatorFetch(`/agents/credit-thresholds/${args.id}`, { method: "DELETE" });
+      const resp = await this.facilitatorFetch(`/v1/agents/credit-thresholds/${args.id}`, { method: "DELETE" });
       const result = await this.readJsonOrError(resp);
       if (!result.ok) return `Error: ${result.msg}`;
       return `## Credit Threshold Deleted\n\nThreshold #${args.id} removed.`;
@@ -1216,7 +1268,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     args: z.infer<typeof EstimateX402CostSchema>,
   ): Promise<string> {
     try {
-      const resp = await this.facilitatorFetch("/x402/estimate", {
+      const resp = await this.facilitatorFetch("/v1/x402/estimate", {
         method: "POST",
         body: JSON.stringify({ url: args.url, method: args.method }),
       });
@@ -1270,6 +1322,200 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") return "Request timed out.";
       return `Error estimating cost: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // MERCHANT ALLOWLIST (5) — opt-in, default-deny host (pre-fetch) and payee
+  // (post-402, pre-sign) gating. Default mode 'off' = allow any vendor. All
+  // require facilitatorApiKey (agent-key auth) like the awareness actions.
+  // ════════════════════════════════════════════════════════════════════════
+
+  // ── set_allowlist_mode ──────────────────────────────────────────────────
+
+  @CreateAction({
+    name: "set_allowlist_mode",
+    description:
+      "Set the agent's merchant-allowlist enforcement mode: off | host | vendor | both. " +
+      "'off' (default) allows any vendor. 'host' blocks unlisted hosts before the first " +
+      "fetch; 'vendor' blocks unlisted payees before signing; 'both' enforces both. " +
+      "Allowlist entries themselves are managed with add_allowlist_entry.",
+    schema: SetAllowlistModeSchema,
+  })
+  async setAllowlistMode(
+    _walletProvider: EvmWalletProvider,
+    args: z.infer<typeof SetAllowlistModeSchema>,
+  ): Promise<string> {
+    try {
+      const resp = await this.facilitatorFetch("/v1/agents/allowlist-mode", {
+        method: "PUT",
+        body: JSON.stringify({ mode: args.mode }),
+      });
+      const result = await this.readJsonOrError(resp);
+      if (!result.ok) return `Error: ${result.msg}`;
+      const d = result.data as { mode: string };
+      return `## Allowlist Mode Set\n\n**Mode**: \`${d.mode ?? args.mode}\``;
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") return "Request timed out.";
+      return `Error setting allowlist mode: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  // ── get_allowlist_mode ──────────────────────────────────────────────────
+
+  @CreateAction({
+    name: "get_allowlist_mode",
+    description:
+      "Return the agent's current merchant-allowlist enforcement mode (off | host | vendor | both).",
+    schema: GetAllowlistModeSchema,
+  })
+  async getAllowlistMode(
+    _walletProvider: EvmWalletProvider,
+    _args: z.infer<typeof GetAllowlistModeSchema>,
+  ): Promise<string> {
+    try {
+      const resp = await this.facilitatorFetch("/v1/agents/allowlist-mode");
+      const result = await this.readJsonOrError(resp);
+      if (!result.ok) return `Error: ${result.msg}`;
+      const d = result.data as { mode: string };
+      return `## Allowlist Mode\n\n**Mode**: \`${d.mode ?? "off"}\``;
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") return "Request timed out.";
+      return `Error fetching allowlist mode: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  // ── add_allowlist_entry ─────────────────────────────────────────────────
+
+  @CreateAction({
+    name: "add_allowlist_entry",
+    description:
+      "Add a merchant-allowlist entry — an allowed-AND-capped policy row. Use kind='api' to " +
+      "allowlist a host (matchKey = hostname) or kind='vendor' to allowlist a payee " +
+      "(matchKey = recipient wallet). limitRaw caps spend against this entry (raw USDC, 6 " +
+      "decimals). Enforcement only kicks in once set_allowlist_mode is host/vendor/both.",
+    schema: AddAllowlistEntrySchema,
+  })
+  async addAllowlistEntry(
+    _walletProvider: EvmWalletProvider,
+    args: z.infer<typeof AddAllowlistEntrySchema>,
+  ): Promise<string> {
+    // Kind-aware cross-field validation: the flat schema allows incoherent
+    // combos (e.g. a vendor entry whose matchKey is a hostname, or an api
+    // entry asking for the 'recipient' matcher). Reject those before the
+    // round-trip. Reuse the existing AddressSchema for the payee check.
+    if (args.kind === "vendor") {
+      if (!AddressSchema.safeParse(args.matchKey).success) {
+        return "Error: kind='vendor' requires matchKey to be a payee wallet address (0x + 40 hex).";
+      }
+      if (args.matchKind !== undefined && args.matchKind !== "recipient") {
+        return "Error: kind='vendor' only supports matchKind='recipient'.";
+      }
+    } else {
+      // kind === 'api' (host entry)
+      if (
+        args.matchKind !== undefined &&
+        args.matchKind !== "host_exact" &&
+        args.matchKind !== "host_suffix"
+      ) {
+        return "Error: kind='api' only supports matchKind='host_exact' or 'host_suffix'.";
+      }
+    }
+    try {
+      const body: Record<string, unknown> = {
+        kind: args.kind,
+        matchKey: args.matchKey,
+        limitRaw: args.limitRaw,
+      };
+      if (args.matchKind) body.matchKind = args.matchKind;
+      const resp = await this.facilitatorFetch("/v1/agents/policies", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      const result = await this.readJsonOrError(resp);
+      if (!result.ok) return `Error: ${result.msg}`;
+      const d = result.data as {
+        policy: { id: number; kind: string; matchKey: string; limitRaw: string };
+      };
+      const p = d.policy;
+      return [
+        "## Allowlist Entry Added\n",
+        `**#${p.id}** ${p.kind} — \`${p.matchKey}\``,
+        `**Cap**: ${formatTokenAmount(BigInt(p.limitRaw ?? args.limitRaw), 6, "USDC")}`,
+      ].join("\n");
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") return "Request timed out.";
+      return `Error adding allowlist entry: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  // ── remove_allowlist_entry ──────────────────────────────────────────────
+
+  @CreateAction({
+    name: "remove_allowlist_entry",
+    description:
+      "Remove (revoke) a merchant-allowlist entry by policy id (from list_allowlist).",
+    schema: RemoveAllowlistEntrySchema,
+  })
+  async removeAllowlistEntry(
+    _walletProvider: EvmWalletProvider,
+    args: z.infer<typeof RemoveAllowlistEntrySchema>,
+  ): Promise<string> {
+    try {
+      const resp = await this.facilitatorFetch(`/v1/agents/policies/${args.policyId}`, {
+        method: "DELETE",
+      });
+      const result = await this.readJsonOrError(resp);
+      if (!result.ok) return `Error: ${result.msg}`;
+      return `## Allowlist Entry Removed\n\nEntry #${args.policyId} revoked.`;
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") return "Request timed out.";
+      return `Error removing allowlist entry: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  // ── list_allowlist ──────────────────────────────────────────────────────
+
+  @CreateAction({
+    name: "list_allowlist",
+    description:
+      "List the agent's merchant-allowlist entries (host 'api' and payee 'vendor' policies) " +
+      "with their spend caps. Does not include session/task spend policies.",
+    schema: ListAllowlistSchema,
+  })
+  async listAllowlist(
+    _walletProvider: EvmWalletProvider,
+    _args: z.infer<typeof ListAllowlistSchema>,
+  ): Promise<string> {
+    try {
+      const resp = await this.facilitatorFetch("/v1/agents/policies");
+      const result = await this.readJsonOrError(resp);
+      if (!result.ok) return `Error: ${result.msg}`;
+      const d = result.data as {
+        policies: Array<{
+          id: number;
+          kind: string;
+          matchKey: string;
+          matchKind: string | null;
+          limitRaw: string;
+        }>;
+      };
+      const entries = (d.policies ?? []).filter(
+        (p) => p.kind === "api" || p.kind === "vendor",
+      );
+      if (!entries.length) return "## Allowlist\n\nNo host/payee allowlist entries.";
+      const lines = ["## Allowlist\n"];
+      for (const p of entries) {
+        const cap = formatTokenAmount(BigInt(p.limitRaw ?? "0"), 6, "USDC");
+        lines.push(
+          `**#${p.id}** ${p.kind} — \`${p.matchKey}\` ` +
+            `(matchKind ${p.matchKind ?? "—"}) — cap ${cap}`,
+        );
+      }
+      return lines.join("\n");
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") return "Request timed out.";
+      return `Error listing allowlist: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 }

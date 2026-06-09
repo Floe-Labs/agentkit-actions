@@ -15,6 +15,11 @@ export {
   X402GetBalanceSchema,
   X402AwaitSettlementSchema,
   X402GetTransactionsSchema,
+  SetAllowlistModeSchema,
+  GetAllowlistModeSchema,
+  AddAllowlistEntrySchema,
+  RemoveAllowlistEntrySchema,
+  ListAllowlistSchema,
 } from "./x402ActionProvider.js";
 export type { FloeConfig } from "./types.js";
 export type { X402Config } from "./x402ActionProvider.js";

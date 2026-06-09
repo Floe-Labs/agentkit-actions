@@ -14,9 +14,9 @@
 
 - **`FloeAgent({ apiKey })`** — runtime client. No wallet, no chain knowledge. `agent.fetch(url)`, `agent.balance()`, dollars in / dollars out.
 - **`floeActionProvider()`** — 30 lending actions (markets, intents, loans, collateral, flash loans, credit-facility helpers).
-- **`x402ActionProvider()`** — 15 actions (6 x402 credit-delegation + 9 agent-awareness).
+- **`x402ActionProvider()`** — 22 actions (6 x402 credit-delegation + 9 agent-awareness + 5 merchant-allowlist + 2 credit-facility helpers).
 
-Register both action providers in `actionProviders: [...]` if you want the full 45-action surface. Python parity ships as [`floe-agentkit-actions`](https://github.com/floe-labs/agentkit-actions-py).
+Register both action providers in `actionProviders: [...]` if you want the full 52-action surface. Python parity ships as [`floe-agentkit-actions`](https://github.com/floe-labs/agentkit-actions-py).
 
 > **$2 free credit (~200 API calls).** Your agent can start paying for APIs today — no card required. [Get started →](https://dev-dashboard.floelabs.xyz)
 
@@ -68,7 +68,7 @@ import { floeActionProvider, x402ActionProvider } from "floe-agent";
 
 const agentkit = await AgentKit.from({
   walletProvider,
-  // Register BOTH providers to expose all 45 actions.
+  // Register BOTH providers to expose all 52 actions.
   actionProviders: [
     floeActionProvider(),
     x402ActionProvider({ facilitatorApiKey: process.env.FLOE_FACILITATOR_API_KEY }),
@@ -111,13 +111,15 @@ await agentkit.run("repay_and_reborrow", { loanId: "42" });
 
 ```
 Your app
-  └─ AgentKit (45 actions exposed when both providers are registered)
+  └─ AgentKit (52 actions exposed when both providers are registered)
         ├─ floeActionProvider()   → 30 lending actions
         │                          (markets, intents, loans, collateral,
         │                           flash loans, credit-facility helpers)
-        └─ x402ActionProvider()   → 15 actions
+        └─ x402ActionProvider()   → 22 actions
                                    (6 x402 credit delegation +
-                                    9 agent-awareness primitives)
+                                    9 agent-awareness primitives +
+                                    5 merchant-allowlist +
+                                    2 credit-facility helpers)
               │
               │ each provider uses your WalletProvider to read chain
               │ and sign transactions:
@@ -164,13 +166,13 @@ const agentkit = await AgentKit.from({
 });
 ```
 
-> **Skip `x402ActionProvider` only if your agent never makes x402 payments and never queries credit / spend-limit / threshold state.** You will lose 15 actions including `x402_fetch`, `estimate_x402_cost`, `get_credit_remaining`, `set_spend_limit`, and `register_credit_threshold`.
+> **Skip `x402ActionProvider` only if your agent never makes x402 payments and never queries credit / spend-limit / threshold state.** You will lose 22 actions including `x402_fetch`, `estimate_x402_cost`, `get_credit_remaining`, `set_spend_limit`, and `register_credit_threshold`.
 
 ---
 
-## Actions (45 total)
+## Actions (52 total)
 
-**Provider split:** `floeActionProvider` exposes 30 lending actions (everything in this section through *Credit Facility Actions*). `x402ActionProvider` exposes 15 actions (*x402 Credit Delegation* + *Agent Awareness*). Register both for the full surface.
+**Provider split:** `floeActionProvider` exposes 30 lending actions (everything in this section through *Credit Facility Actions*). `x402ActionProvider` exposes 22 actions (*x402 Credit Delegation* + *Agent Awareness* + *Merchant Allowlist* + 2 credit-facility helpers). Register both for the full surface.
 
 ### Read Actions (8) — `floeActionProvider`
 
@@ -260,6 +262,18 @@ Lets an agent answer "do I have credit?", "is this call worth it?", and "where a
 
 > **Decision-loop pattern:** call `estimate_x402_cost` → check `willExceedAvailable` / `willExceedSpendLimit` → conditionally `x402_fetch`. This is the "answer the 3 rational-agent questions in one round-trip" workflow.
 
+### Merchant Allowlist Actions (5) — `x402ActionProvider`
+
+Opt-in, default-deny restriction on **which destinations** an agent may pay. An allowlist entry is an ordinary capped policy row that doubles as "allowed AND capped". Default mode `off` = allow any vendor (zero onboarding friction). All require `facilitatorApiKey`.
+
+| Action | Description |
+|--------|-------------|
+| `set_allowlist_mode` | Set enforcement: `off` \| `host` (block unlisted hosts pre-fetch) \| `vendor` (block unlisted payees pre-sign) \| `both` |
+| `get_allowlist_mode` | Read the agent's current enforcement mode |
+| `add_allowlist_entry` | Add an allowed-AND-capped entry — `kind='api'` (host) or `kind='vendor'` (payee), with a `limitRaw` spend cap |
+| `remove_allowlist_entry` | Revoke an allowlist entry by policy id (from `list_allowlist`) |
+| `list_allowlist` | List host (`api`) and payee (`vendor`) allowlist entries with their caps |
+
 ### Session State
 
 When you deploy via `deploy_flash_arb_receiver`, the contract address is stored on the provider instance. Subsequent calls to `flash_arb`, `get_flash_arb_balance`, and `verify_flash_arb_receiver` auto-use it — no need to pass the address again. You can always override by passing `receiverAddress` explicitly.
@@ -348,7 +362,7 @@ Then register `floeActionProvider()` and `x402ActionProvider()` alongside the bu
 
 ## CLI: `floe-agent`
 
-Interactive conversational agent for testing all 45 actions without writing any framework code. Both providers are registered automatically.
+Interactive conversational agent for testing all 52 actions without writing any framework code. Both providers are registered automatically.
 
 ### Run directly
 
@@ -585,7 +599,7 @@ npm run build
 src/
   index.ts                 # Package entry point, exports both providers
   floeActionProvider.ts    # 30 lending actions (FloeActionProvider)
-  x402ActionProvider.ts    # 15 actions (6 x402 credit delegation + 9 agent-awareness)
+  x402ActionProvider.ts    # 22 actions (6 x402 credit delegation + 9 agent-awareness + 5 merchant-allowlist + 2 credit-facility helpers)
   schemas.ts               # Zod schemas for action inputs (e.g. InstantBorrowSchema, RepayLoanSchema)
   constants.ts             # Contract addresses, ABIs, known tokens
   flashArbBytecode.ts      # Compiled FlashArbReceiver bytecode + constructor ABI
