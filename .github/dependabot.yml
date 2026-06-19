@@ -1,6 +1,14 @@
 version: 2
 updates:
+  # GitHub Actions — one grouped PR weekly (limited, low-noise).
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "thursday"
+      time: "09:00"
+      timezone: "Etc/UTC"
+    groups:
+      weekly-updates:
+        patterns:
+          - "*"
