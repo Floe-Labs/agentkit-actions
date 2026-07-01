@@ -26,7 +26,7 @@ Two layers in one package:
 | Layer | What it is | For |
 |---|---|---|
 | **`FloeAgent`** ⭐ | High-level runtime client. No wallet, no chain knowledge. Dollars in, dollars out. | Most agent developers |
-| **`floeActionProvider()` + `x402ActionProvider()`** | 52 AgentKit actions for self-custody, lending, and framework integrations. Python parity ships as `floe-agentkit-actions`. | Self-custody / on-chain use cases |
+| **`floeActionProvider()` + `x402ActionProvider()`** | 54 AgentKit actions for self-custody, lending, and framework integrations. Python parity ships as `floe-agentkit-actions`. | Self-custody / on-chain use cases |
 
 ## Install
 
@@ -148,7 +148,7 @@ const { text } = await generateText({
 ---
 
 <details>
-<summary><b>Advanced: self-custody, lending & flash-loan actions (52 total)</b></summary>
+<summary><b>Advanced: self-custody, lending & flash-loan actions (54 total)</b></summary>
 
 > These actions are for **self-custody and on-chain use cases** (managing your
 > own wallet, lending against deposits, MEV/arb). If you're building a standard
@@ -156,8 +156,8 @@ const { text } = await generateText({
 > this section.
 
 `floeActionProvider()` exposes 30 lending actions; `x402ActionProvider()`
-exposes 22 (6 x402 credit-delegation + 9 agent-awareness + 5 merchant-allowlist
-+ 2 credit-facility helpers). Register both for the full 52-action surface.
+exposes 24 (6 x402 credit-delegation + 9 agent-awareness + 5 merchant-allowlist
++ 2 credit-facility helpers + 2 Floe Inference). Register both for the full 54-action surface.
 
 ### Install
 
@@ -254,7 +254,7 @@ a formatted result including the tx hash.
 check balance. The deployed receiver address is stored on the provider instance
 and auto-reused; override with `receiverAddress`.
 
-## `x402ActionProvider()` — 22 actions
+## `x402ActionProvider()` — 24 actions
 
 All x402 + agent-awareness + allowlist actions require `facilitatorApiKey`
 configured on `x402ActionProvider`.
