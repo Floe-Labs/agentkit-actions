@@ -1438,7 +1438,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
         `**Model**: ${d.model}`,
         `**Source**: ${d.provider} (${d.rail})`,
         `**Cost**: $${d.cost_usdc} USDC`,
-        `**Upstream**: $${d.upstream_cost_usdc ?? "—"} USDC · **Margin**: ${(d.margin_bps / 100).toFixed(2)}%`,
+        `**Upstream**: $${d.upstream_cost_usdc ?? "—"} USDC · **Margin**: ${Number.isFinite(d.margin_bps) ? `${(d.margin_bps / 100).toFixed(2)}%` : "—"}`,
       ].join("\n");
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") return "Request timed out.";
