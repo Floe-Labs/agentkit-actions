@@ -374,7 +374,7 @@ never cached.
 
 ## Examples
 
-See [`floe-examples`](https://github.com/Floe-Labs/floe-examples) for end-to-end
+See [`floe-cookbook`](https://github.com/Floe-Labs/floe-cookbook) for end-to-end
 multi-framework agents. The `examples/` directory here has a Vercel AI SDK
 chatbot (`chatbot.ts`) and a no-framework standalone script (`standalone.ts`).
 
@@ -406,7 +406,7 @@ Floe ships the spend layer first and builds credit on top of it.
 
 ## Links
 
-[Website](https://floelabs.xyz) · [Docs](https://floe-labs.gitbook.io/docs) · [Python SDK](https://github.com/Floe-Labs/agentkit-actions-py) · [MCP server](https://github.com/Floe-Labs/floe-mcp-server) · [Examples](https://github.com/Floe-Labs/floe-examples)
+[Website](https://floelabs.xyz) · [Docs](https://floe-labs.gitbook.io/docs) · [Python SDK](https://github.com/Floe-Labs/agentkit-actions-py) · [MCP server](https://github.com/Floe-Labs/floe-mcp-server) · [Examples](https://github.com/Floe-Labs/floe-cookbook)
 
 ## License
 
