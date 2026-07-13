@@ -229,25 +229,45 @@ export const ListAllowlistSchema = z.object({});
 
 export const ListInferenceModelsSchema = z.object({});
 
-export const EstimateInferenceCostSchema = z.object({
-  model: z
-    .string()
-    .min(1)
-    .max(128)
-    .describe('Model id from list_inference_models, e.g. "openai/gpt-4o" or "elevenlabs/eleven-turbo-v2.5".'),
-  inputTokens: z.number().int().nonnegative().optional().describe("Prompt tokens (text models)."),
-  outputTokens: z.number().int().nonnegative().optional().describe("Completion tokens (text models)."),
-  cachedInputTokens: z
-    .number()
-    .int()
-    .nonnegative()
-    .optional()
-    .describe("Cached prompt tokens billed at the cached rate (text models)."),
-  characters: z.number().int().nonnegative().optional().describe("Characters of input text (TTS models)."),
-  audioSeconds: z.number().int().nonnegative().optional().describe("Seconds of audio (STT models)."),
-  audioInputTokens: z.number().int().nonnegative().optional().describe("Input audio tokens (realtime voice)."),
-  audioOutputTokens: z.number().int().nonnegative().optional().describe("Output audio tokens (realtime voice)."),
-});
+// Mixed modality units are deliberately NOT rejected here: realtime models bill
+// text + audio tokens on one rate card (and Gemini TTS bills text_input_token +
+// audio_output_token), so an unpriceable mix must fail server-side
+// (no_priceable_source) rather than in the schema.
+export const EstimateInferenceCostSchema = z
+  .object({
+    model: z
+      .string()
+      .min(1)
+      .max(128)
+      .describe('Model id from list_inference_models, e.g. "openai/gpt-4o" or "elevenlabs/eleven-turbo-v2.5".'),
+    inputTokens: z.number().int().nonnegative().optional().describe("Prompt tokens (text models)."),
+    outputTokens: z.number().int().nonnegative().optional().describe("Completion tokens (text models)."),
+    cachedInputTokens: z
+      .number()
+      .int()
+      .nonnegative()
+      .optional()
+      .describe("Cached prompt tokens billed at the cached rate (text models)."),
+    characters: z.number().int().nonnegative().optional().describe("Characters of input text (TTS models)."),
+    audioSeconds: z.number().int().nonnegative().optional().describe("Seconds of audio (STT models)."),
+    audioInputTokens: z.number().int().nonnegative().optional().describe("Input audio tokens (realtime voice)."),
+    audioOutputTokens: z.number().int().nonnegative().optional().describe("Output audio tokens (realtime voice)."),
+  })
+  .refine(
+    (a) =>
+      (a.inputTokens ?? 0) +
+        (a.outputTokens ?? 0) +
+        (a.cachedInputTokens ?? 0) +
+        (a.characters ?? 0) +
+        (a.audioSeconds ?? 0) +
+        (a.audioInputTokens ?? 0) +
+        (a.audioOutputTokens ?? 0) >
+      0,
+    {
+      message:
+        "Provide at least one non-zero usage field (inputTokens/outputTokens, characters, audioSeconds, or audio tokens).",
+    },
+  );
 
 // ── ABI fragments for operator functions ────────────────────────────────────
 
@@ -1383,7 +1403,7 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
       if (models.length === 0) return "No models are currently available on Floe Inference.";
       const lines = ["## Floe Inference Models\n", `**${models.length}** available:\n`];
       for (const m of models) {
-        const ctx = m.context_window ? ` · ${m.context_window.toLocaleString()} ctx` : "";
+        const ctx = m.context_window != null ? ` · ${m.context_window.toLocaleString()} ctx` : "";
         lines.push(`- \`${m.id}\` (${m.modality ?? "text"}${ctx})`);
       }
       return lines.join("\n");
