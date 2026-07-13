@@ -20,6 +20,8 @@ export {
   AddAllowlistEntrySchema,
   RemoveAllowlistEntrySchema,
   ListAllowlistSchema,
+  ListInferenceModelsSchema,
+  EstimateInferenceCostSchema,
 } from "./x402ActionProvider.js";
 export type { FloeConfig } from "./types.js";
 export type { X402Config } from "./x402ActionProvider.js";

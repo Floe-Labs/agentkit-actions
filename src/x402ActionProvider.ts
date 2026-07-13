@@ -223,6 +223,52 @@ export const RemoveAllowlistEntrySchema = z.object({
 
 export const ListAllowlistSchema = z.object({});
 
+// ── Floe Inference schemas (FLO-602) ────────────────────────────────────────
+// Keyless pay-as-you-go LLM/voice gateway. list_inference_models browses the
+// catalog; estimate_inference_cost prices a usage vector before spending.
+
+export const ListInferenceModelsSchema = z.object({});
+
+// Mixed modality units are deliberately NOT rejected here: realtime models bill
+// text + audio tokens on one rate card (and Gemini TTS bills text_input_token +
+// audio_output_token), so an unpriceable mix must fail server-side
+// (no_priceable_source) rather than in the schema.
+export const EstimateInferenceCostSchema = z
+  .object({
+    model: z
+      .string()
+      .min(1)
+      .max(128)
+      .describe('Model id from list_inference_models, e.g. "openai/gpt-4o" or "elevenlabs/eleven-turbo-v2.5".'),
+    inputTokens: z.number().int().nonnegative().optional().describe("Prompt tokens (text models)."),
+    outputTokens: z.number().int().nonnegative().optional().describe("Completion tokens (text models)."),
+    cachedInputTokens: z
+      .number()
+      .int()
+      .nonnegative()
+      .optional()
+      .describe("Cached prompt tokens billed at the cached rate (text models)."),
+    characters: z.number().int().nonnegative().optional().describe("Characters of input text (TTS models)."),
+    audioSeconds: z.number().int().nonnegative().optional().describe("Seconds of audio (STT models)."),
+    audioInputTokens: z.number().int().nonnegative().optional().describe("Input audio tokens (realtime voice)."),
+    audioOutputTokens: z.number().int().nonnegative().optional().describe("Output audio tokens (realtime voice)."),
+  })
+  .refine(
+    (a) =>
+      (a.inputTokens ?? 0) +
+        (a.outputTokens ?? 0) +
+        (a.cachedInputTokens ?? 0) +
+        (a.characters ?? 0) +
+        (a.audioSeconds ?? 0) +
+        (a.audioInputTokens ?? 0) +
+        (a.audioOutputTokens ?? 0) >
+      0,
+    {
+      message:
+        "Provide at least one non-zero usage field (inputTokens/outputTokens, characters, audioSeconds, or audio tokens).",
+    },
+  );
+
 // ── ABI fragments for operator functions ────────────────────────────────────
 
 const OPERATOR_ABI = [
@@ -1319,6 +1365,101 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
         );
       }
       return lines.join("\n");
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") return "Request timed out.";
+      return `Error estimating cost: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // FLOE INFERENCE (2) — FLO-602 keyless pay-as-you-go LLM/voice gateway.
+  // Browse the model catalog and price a call before spending. Both require
+  // facilitatorApiKey (agent-key auth) like the awareness actions.
+  // ════════════════════════════════════════════════════════════════════════
+
+  // ── list_inference_models ───────────────────────────────────────────────
+
+  @CreateAction({
+    name: "list_inference_models",
+    description:
+      "List the models on Floe Inference — the keyless pay-as-you-go LLM/voice gateway. Returns " +
+      "OpenAI-compatible model ids (e.g. 'openai/gpt-4o'), their modality (text | embedding | tts | " +
+      "stt | realtime), and context window. Use an id with the OpenAI-compatible endpoints, or price " +
+      "a call first with estimate_inference_cost.",
+    schema: ListInferenceModelsSchema,
+  })
+  async listInferenceModels(
+    _walletProvider: EvmWalletProvider,
+    _args: z.infer<typeof ListInferenceModelsSchema>,
+  ): Promise<string> {
+    try {
+      const resp = await this.facilitatorFetch("/v1/models");
+      const result = await this.readJsonOrError(resp);
+      if (!result.ok) return `Error: ${result.msg}`;
+      const d = result.data as {
+        data?: Array<{ id: string; modality?: string; context_window?: number | null }>;
+      };
+      const models = d.data ?? [];
+      if (models.length === 0) return "No models are currently available on Floe Inference.";
+      const lines = ["## Floe Inference Models\n", `**${models.length}** available:\n`];
+      for (const m of models) {
+        const ctx = m.context_window != null ? ` · ${m.context_window.toLocaleString()} ctx` : "";
+        lines.push(`- \`${m.id}\` (${m.modality ?? "text"}${ctx})`);
+      }
+      return lines.join("\n");
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") return "Request timed out.";
+      return `Error listing models: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  // ── estimate_inference_cost ─────────────────────────────────────────────
+
+  @CreateAction({
+    name: "estimate_inference_cost",
+    description:
+      "Estimate the USDC cost of a Floe Inference call for a model + usage vector, WITHOUT making the " +
+      "call or touching balance. Returns the cheapest priceable source (rail, provider, margin, cost). " +
+      "Provide only the units the model bills: text uses inputTokens/outputTokens (+cachedInputTokens); " +
+      "TTS uses characters; STT uses audioSeconds; realtime voice uses audioInputTokens/audioOutputTokens. " +
+      "Use BEFORE inference to decide gating.",
+    schema: EstimateInferenceCostSchema,
+  })
+  async estimateInferenceCost(
+    _walletProvider: EvmWalletProvider,
+    args: z.infer<typeof EstimateInferenceCostSchema>,
+  ): Promise<string> {
+    try {
+      const resp = await this.facilitatorFetch("/v1/estimate", {
+        method: "POST",
+        body: JSON.stringify({
+          model: args.model,
+          input_tokens: args.inputTokens,
+          output_tokens: args.outputTokens,
+          cached_input_tokens: args.cachedInputTokens,
+          characters: args.characters,
+          audio_seconds: args.audioSeconds,
+          audio_input_tokens: args.audioInputTokens,
+          audio_output_tokens: args.audioOutputTokens,
+        }),
+      });
+      const result = await this.readJsonOrError(resp);
+      if (!result.ok) return `Error: ${result.msg}`;
+      const d = result.data as {
+        model: string;
+        rail: string;
+        provider: string;
+        margin_bps: number;
+        cost_usdc: string;
+        upstream_cost_usdc?: string;
+      };
+      return [
+        "## Floe Inference Estimate\n",
+        `**Model**: ${d.model}`,
+        `**Source**: ${d.provider} (${d.rail})`,
+        `**Cost**: $${d.cost_usdc} USDC`,
+        `**Upstream**: $${d.upstream_cost_usdc ?? "—"} USDC · **Margin**: ${Number.isFinite(d.margin_bps) ? `${(d.margin_bps / 100).toFixed(2)}%` : "—"}`,
+      ].join("\n");
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") return "Request timed out.";
       return `Error estimating cost: ${e instanceof Error ? e.message : String(e)}`;
