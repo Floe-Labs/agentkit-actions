@@ -58,6 +58,32 @@ export interface X402FetchInput {
   idempotencyKey?: string;
 }
 
+/** Spend-cap dimension the advisory's tightest cap is keyed to. */
+export type CapScope = "credit_line" | "session" | "task" | "api" | "vendor" | "key";
+
+/**
+ * Parsed `X-Floe-Budget-Advisory` response header — how close the agent is to
+ * the tightest spend cap Floe enforces, so it can taper or escalate *before*
+ * the 402 hard-stop fires. Field names mirror the server's snake_case wire
+ * shape verbatim (source of truth: the Floe API's budget-advisory service).
+ */
+export interface BudgetAdvisory {
+  /** Present only when the operator configured a near-limit threshold. */
+  near_limit?: boolean;
+  tightest: {
+    scope: CapScope;
+    /** Hostname / taskId / payee the cap is keyed to; null for agent-wide caps. */
+    match: string | null;
+    /** Portion of the cap already used, 0..10000 basis points. */
+    used_bps: number;
+    /** Remaining headroom as a raw 6-decimal USDC integer string. */
+    remaining_raw: string;
+    window_kind: "once" | "rolling" | "session" | "credit_line" | null;
+    /** ISO-8601 refill time; only present for rolling windows. */
+    window_resets_at?: string;
+  };
+}
+
 export interface FetchResult {
   status: number;
   headers: Record<string, string>;
@@ -68,6 +94,12 @@ export interface FetchResult {
   idempotentReplay: boolean;
   /** Raw 6-decimal USDC integer string (advanced; prefer `cost`). */
   costRaw?: string;
+  /**
+   * Parsed `X-Floe-Budget-Advisory` (proximity to the tightest spend cap).
+   * Absent when the server flag is off, the facilitator predates the header,
+   * or the header is malformed.
+   */
+  budgetAdvisory?: BudgetAdvisory;
 }
 
 /** @deprecated Use FetchResult — kept for one release for compatibility. */
@@ -279,6 +311,18 @@ export class FloeAgent {
       }
 
       const costRaw = responseHeaders["x-floe-cost-usdc"];
+
+      // Defensive parse — a malformed header must never break a paid fetch.
+      const advisoryRaw = responseHeaders["x-floe-budget-advisory"];
+      let budgetAdvisory: BudgetAdvisory | undefined;
+      if (advisoryRaw) {
+        try {
+          budgetAdvisory = JSON.parse(advisoryRaw) as BudgetAdvisory;
+        } catch {
+          // malformed header → leave undefined
+        }
+      }
+
       return {
         status: resp.status,
         headers: responseHeaders,
@@ -286,6 +330,7 @@ export class FloeAgent {
         cost: rawToDollars(costRaw),
         costRaw: costRaw ?? undefined,
         idempotentReplay: responseHeaders["x-floe-idempotent-replay"] === "true",
+        ...(budgetAdvisory !== undefined ? { budgetAdvisory } : {}),
       };
     }
     // Unreachable — the loop always returns or throws.
