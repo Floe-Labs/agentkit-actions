@@ -39,6 +39,8 @@ export type {
   X402FetchResult, // deprecated alias for FetchResult
   BudgetAdvisory,
   CapScope,
+  OutcomeReport,
+  OutcomeResult,
   BalanceResult,
   TransactionsResult,
 } from "./floeAgent.js";
