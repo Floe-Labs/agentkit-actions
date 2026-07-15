@@ -89,6 +89,26 @@ describe("FloeAgent.reportOutcome (FLO-633)", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("validates status and note locally (runtime callers bypass TS types)", async () => {
+    await expect(
+      newAgent().reportOutcome("a1", { status: "great" as never }),
+    ).rejects.toThrow(/invalid outcome status/);
+    await expect(
+      newAgent().reportOutcome("a1", { status: "success", note: "x".repeat(501) }),
+    ).rejects.toThrow(/note/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("wraps a malformed 2xx body in a typed FloeAgentError", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response("not-json", { status: 200, headers: { "content-type": "text/plain" } }),
+    );
+    await expect(newAgent().reportOutcome("a1", { status: "success" })).rejects.toMatchObject({
+      status: 200,
+      code: "invalid_response_body",
+    });
+  });
+
   it("surfaces server errors as FloeAgentError", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(400, { error: "invalid_action_id" }));
     await expect(newAgent().reportOutcome("a1", { status: "failure" })).rejects.toMatchObject({

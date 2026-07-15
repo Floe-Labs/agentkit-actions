@@ -413,6 +413,12 @@ export class FloeAgent {
    */
   async reportOutcome(actionId: string, report: OutcomeReport): Promise<OutcomeResult> {
     const tag = validateTag("actionId", actionId);
+    if (!["success", "failure", "partial", "unknown"].includes(report.status)) {
+      throw new FloeAgentError(`invalid outcome status: ${String(report.status)}.`, 400);
+    }
+    if (report.note !== undefined && (typeof report.note !== "string" || report.note.length > 500)) {
+      throw new FloeAgentError("note must be a string of at most 500 characters.", 400);
+    }
     if (report.scoreBps !== undefined && (!Number.isInteger(report.scoreBps) || report.scoreBps < 0 || report.scoreBps > 10000)) {
       throw new FloeAgentError(`scoreBps must be an integer 0..10000 (got ${report.scoreBps}).`, 400);
     }
@@ -432,7 +438,18 @@ export class FloeAgent {
         body,
       );
     }
-    return JSON.parse(body) as OutcomeResult;
+    // A 2xx with a malformed body surfaces as a typed error, matching the
+    // SDK's other JSON APIs — never a raw SyntaxError.
+    try {
+      return JSON.parse(body) as OutcomeResult;
+    } catch {
+      throw new FloeAgentError(
+        `reportOutcome returned ${resp.status} but the body was not valid JSON.`,
+        resp.status,
+        "invalid_response_body",
+        body,
+      );
+    }
   }
 
   /**
