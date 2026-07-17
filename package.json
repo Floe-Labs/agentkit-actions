@@ -69,6 +69,6 @@
     "@coinbase/agentkit": "^0.2.0",
     "dotenv": "^17.3.1",
     "typescript": "^5.4.0",
-    "vitest": "^1.0.0"
+    "vitest": "^4.1.10"
   }
 }
