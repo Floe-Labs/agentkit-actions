@@ -135,6 +135,18 @@ describe("FloeAgent.reportOutcome (FLO-633)", () => {
     });
   });
 
+  it("keeps the typed error contract when the error body is JSON null", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response("null", { status: 500, headers: { "content-type": "application/json" } }),
+    );
+    await expect(newAgent().reportOutcome("a1", { status: "failure" })).rejects.toMatchObject({
+      name: "FloeAgentError",
+      status: 500,
+      code: undefined,
+      body: null,
+    });
+  });
+
   it("surfaces server errors as FloeAgentError, with the parsed body attached", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(400, { error: "invalid_action_id" }));
     await expect(newAgent().reportOutcome("a1", { status: "failure" })).rejects.toMatchObject({

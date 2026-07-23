@@ -462,16 +462,25 @@ export class FloeAgent {
     );
     const body = await resp.text();
     if (!resp.ok) {
-      let parsed: { error?: string; message?: string } = {};
+      let parsed: unknown;
       let parsedOk = false;
       try {
-        parsed = JSON.parse(body) as typeof parsed;
+        parsed = JSON.parse(body);
         parsedOk = true;
       } catch { /* non-JSON */ }
+      const errorPayload =
+        typeof parsed === "object" && parsed !== null
+          ? parsed as { error?: unknown; message?: unknown }
+          : undefined;
+      const code = typeof errorPayload?.error === "string" ? errorPayload.error : undefined;
+      const message =
+        typeof errorPayload?.message === "string"
+          ? errorPayload.message
+          : code ?? `reportOutcome failed: ${resp.status}`;
       throw new FloeAgentError(
-        parsed.message ?? parsed.error ?? `reportOutcome failed: ${resp.status}`,
+        message,
         resp.status,
-        parsed.error,
+        code,
         body,
         parsedOk ? parsed : undefined,
       );
