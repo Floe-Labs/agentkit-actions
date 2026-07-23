@@ -42,13 +42,36 @@ function rawToDollars(raw: string | null | undefined): number {
 
 const MAX_TAG_LENGTH = 128;
 
-/** Validate a taskId/actionId attribution tag: 1..128 chars after trimming.
- *  The server lowercases; we pass the trimmed value through unchanged. */
+/**
+ * Characters a tag may contain: printable ASCII plus the printable Latin-1
+ * supplement. Tags travel as HTTP header values (and as a URL path segment in
+ * `reportOutcome`), so control characters — CR/LF above all — must never get
+ * through. `fetch` rejects them from inside `request()`, where the transport
+ * catch would relabel the failure `network_error` and hide the real cause.
+ */
+const TAG_ALLOWED_CHARS = /^[\x20-\x7E\xA0-\xFF]+$/;
+
+/** Validate a taskId/actionId attribution tag: 1..128 printable chars after
+ *  trimming. The server lowercases; we pass the trimmed value through
+ *  unchanged. Typed `string`, but runtime callers reach this from plain JS. */
 function validateTag(name: string, value: string): string {
-  const trimmed = value.trim();
+  const given: unknown = value;
+  if (typeof given !== "string") {
+    throw new FloeAgentError(
+      `${name} must be a string (got ${given === null ? "null" : typeof given}).`,
+      400,
+    );
+  }
+  const trimmed = given.trim();
   if (trimmed.length === 0 || trimmed.length > MAX_TAG_LENGTH) {
     throw new FloeAgentError(
       `${name} must be 1..${MAX_TAG_LENGTH} characters after trimming (got ${trimmed.length}).`,
+      400,
+    );
+  }
+  if (!TAG_ALLOWED_CHARS.test(trimmed)) {
+    throw new FloeAgentError(
+      `${name} must contain only printable Latin-1 characters (no control characters).`,
       400,
     );
   }
@@ -413,6 +436,16 @@ export class FloeAgent {
    */
   async reportOutcome(actionId: string, report: OutcomeReport): Promise<OutcomeResult> {
     const tag = validateTag("actionId", actionId);
+    // Typed as OutcomeReport, but a JS caller can hand us anything. Guard the
+    // shape first so a bad argument is a FloeAgentError like every other
+    // validation failure, not a raw TypeError off `report.status`.
+    const given: unknown = report;
+    if (typeof given !== "object" || given === null) {
+      throw new FloeAgentError(
+        `report must be an object (got ${given === null ? "null" : typeof given}).`,
+        400,
+      );
+    }
     if (!["success", "failure", "partial", "unknown"].includes(report.status)) {
       throw new FloeAgentError(`invalid outcome status: ${String(report.status)}.`, 400);
     }
@@ -430,12 +463,17 @@ export class FloeAgent {
     const body = await resp.text();
     if (!resp.ok) {
       let parsed: { error?: string; message?: string } = {};
-      try { parsed = JSON.parse(body) as typeof parsed; } catch { /* non-JSON */ }
+      let parsedOk = false;
+      try {
+        parsed = JSON.parse(body) as typeof parsed;
+        parsedOk = true;
+      } catch { /* non-JSON */ }
       throw new FloeAgentError(
         parsed.message ?? parsed.error ?? `reportOutcome failed: ${resp.status}`,
         resp.status,
         parsed.error,
         body,
+        parsedOk ? parsed : undefined,
       );
     }
     // A 2xx with a malformed body surfaces as a typed error, matching the

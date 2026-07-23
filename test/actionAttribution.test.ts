@@ -61,6 +61,22 @@ describe("FloeAgent.fetch — attribution tags (FLO-633)", () => {
     ).rejects.toThrow(FloeAgentError);
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("rejects a non-string tag as a typed error (runtime callers bypass TS types)", async () => {
+    await expect(
+      newAgent().fetch({ url: "https://api.example.com", taskId: 42 as never }),
+    ).rejects.toMatchObject({ name: "FloeAgentError", status: 400 });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects control characters in a tag rather than letting fetch() throw", async () => {
+    // A raw CR/LF reaches undici, which throws inside request() — the transport
+    // catch would then mislabel it `network_error`. Reject it here instead.
+    await expect(
+      newAgent().fetch({ url: "https://api.example.com", actionId: "abc\r\nX-Injected: 1" }),
+    ).rejects.toThrow(/printable Latin-1/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("FloeAgent.reportOutcome (FLO-633)", () => {
@@ -99,6 +115,16 @@ describe("FloeAgent.reportOutcome (FLO-633)", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("rejects a null/non-object report as a typed error", async () => {
+    await expect(
+      newAgent().reportOutcome("a1", null as never),
+    ).rejects.toMatchObject({ name: "FloeAgentError", status: 400 });
+    await expect(
+      newAgent().reportOutcome("a1", "success" as never),
+    ).rejects.toThrow(/report must be an object/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("wraps a malformed 2xx body in a typed FloeAgentError", async () => {
     fetchMock.mockResolvedValueOnce(
       new Response("not-json", { status: 200, headers: { "content-type": "text/plain" } }),
@@ -109,11 +135,13 @@ describe("FloeAgent.reportOutcome (FLO-633)", () => {
     });
   });
 
-  it("surfaces server errors as FloeAgentError", async () => {
+  it("surfaces server errors as FloeAgentError, with the parsed body attached", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(400, { error: "invalid_action_id" }));
     await expect(newAgent().reportOutcome("a1", { status: "failure" })).rejects.toMatchObject({
       status: 400,
       code: "invalid_action_id",
+      // parity with fetch() / parseJson: structured fields readable off err.body
+      body: { error: "invalid_action_id" },
     });
   });
 });
