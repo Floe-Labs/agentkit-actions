@@ -40,6 +40,44 @@ function rawToDollars(raw: string | null | undefined): number {
   return n / USDC_SCALE;
 }
 
+const MAX_TAG_LENGTH = 128;
+
+/**
+ * Characters a tag may contain: printable ASCII plus the printable Latin-1
+ * supplement. Tags travel as HTTP header values (and as a URL path segment in
+ * `reportOutcome`), so control characters — CR/LF above all — must never get
+ * through. `fetch` rejects them from inside `request()`, where the transport
+ * catch would relabel the failure `network_error` and hide the real cause.
+ */
+const TAG_ALLOWED_CHARS = /^[\x20-\x7E\xA0-\xFF]+$/;
+
+/** Validate a taskId/actionId attribution tag: 1..128 printable chars after
+ *  trimming. The server lowercases; we pass the trimmed value through
+ *  unchanged. Typed `string`, but runtime callers reach this from plain JS. */
+function validateTag(name: string, value: string): string {
+  const given: unknown = value;
+  if (typeof given !== "string") {
+    throw new FloeAgentError(
+      `${name} must be a string (got ${given === null ? "null" : typeof given}).`,
+      400,
+    );
+  }
+  const trimmed = given.trim();
+  if (trimmed.length === 0 || trimmed.length > MAX_TAG_LENGTH) {
+    throw new FloeAgentError(
+      `${name} must be 1..${MAX_TAG_LENGTH} characters after trimming (got ${trimmed.length}).`,
+      400,
+    );
+  }
+  if (!TAG_ALLOWED_CHARS.test(trimmed)) {
+    throw new FloeAgentError(
+      `${name} must contain only printable Latin-1 characters (no control characters).`,
+      400,
+    );
+  }
+  return trimmed;
+}
+
 export interface FloeAgentClientConfig {
   /** Agent runtime key (`floe_*`) minted by `floe-agent register` or the dashboard. */
   apiKey: string;
@@ -56,6 +94,41 @@ export interface X402FetchInput {
   body?: string;
   /** Stripe-style retry-safe key (≤255 chars). Same key + same agent within 10 min returns the cached response. */
   idempotencyKey?: string;
+  /**
+   * Optional task tag (≤128 chars; lowercased server-side). Sent as
+   * `X-Floe-Task-Id` — spend accrues against any per-task budget with this id.
+   */
+  taskId?: string;
+  /**
+   * Optional decision/action tag (≤128 chars; lowercased server-side). Sent as
+   * `X-Floe-Action-Id` — attributes this call's cost to one action of your run
+   * so it can be joined against the outcome you later report via
+   * `reportOutcome()` (cost-per-action eval).
+   */
+  actionId?: string;
+}
+
+/** Caller-supplied result signal for a tagged action. Floe never judges
+ *  quality — this is your own eval signal, stored verbatim. */
+export interface OutcomeReport {
+  status: "success" | "failure" | "partial" | "unknown";
+  /** Optional quality score, basis points 0..10000 (e.g. 8500 = 85%). */
+  scoreBps?: number;
+  /** Optional free-form note (≤500 chars). */
+  note?: string;
+}
+
+/** The stored outcome, as returned by `reportOutcome`. */
+export interface OutcomeResult {
+  actionId: string;
+  outcome: {
+    status: OutcomeReport["status"];
+    scoreBps: number | null;
+    note: string | null;
+    /** How many times this action's outcome has been (re)reported. */
+    reportCount: number;
+    reportedAt: string | null;
+  };
 }
 
 /** Spend-cap dimension the advisory's tightest cap is keyed to. */
@@ -252,6 +325,12 @@ export class FloeAgent {
       }
       headers["Idempotency-Key"] = opts.idempotencyKey;
     }
+    if (opts.taskId !== undefined) {
+      headers["X-Floe-Task-Id"] = validateTag("taskId", opts.taskId);
+    }
+    if (opts.actionId !== undefined) {
+      headers["X-Floe-Action-Id"] = validateTag("actionId", opts.actionId);
+    }
 
     const payload: Record<string, unknown> = {
       url: opts.url,
@@ -340,6 +419,84 @@ export class FloeAgent {
   /** @deprecated Use `fetch` — same behavior, friendlier name. */
   async x402Fetch(input: X402FetchInput): Promise<FetchResult> {
     return this.fetch(input);
+  }
+
+  /**
+   * report how a tagged action turned out, closing the
+   * spend ↔ outcome loop. Pair with `fetch({ actionId })`: tag your paid
+   * calls, then report the result —
+   *
+   *     await agent.fetch({ url, actionId: 'summarize-doc-42' });
+   *     await agent.reportOutcome('summarize-doc-42', { status: 'success', scoreBps: 9000 });
+   *
+   * Your operator's dashboard (and GET /v1/developer/agents/:id/actions) then
+   * shows cost-per-action next to your outcome. Re-reporting the same action
+   * replaces the previous signal (reportCount increments). Floe never judges
+   * quality — status/score are yours, stored verbatim.
+   */
+  async reportOutcome(actionId: string, report: OutcomeReport): Promise<OutcomeResult> {
+    const tag = validateTag("actionId", actionId);
+    // Typed as OutcomeReport, but a JS caller can hand us anything. Guard the
+    // shape first so a bad argument is a FloeAgentError like every other
+    // validation failure, not a raw TypeError off `report.status`.
+    const given: unknown = report;
+    if (typeof given !== "object" || given === null) {
+      throw new FloeAgentError(
+        `report must be an object (got ${given === null ? "null" : typeof given}).`,
+        400,
+      );
+    }
+    if (!["success", "failure", "partial", "unknown"].includes(report.status)) {
+      throw new FloeAgentError(`invalid outcome status: ${String(report.status)}.`, 400);
+    }
+    if (report.note !== undefined && (typeof report.note !== "string" || report.note.length > 500)) {
+      throw new FloeAgentError("note must be a string of at most 500 characters.", 400);
+    }
+    if (report.scoreBps !== undefined && (!Number.isInteger(report.scoreBps) || report.scoreBps < 0 || report.scoreBps > 10000)) {
+      throw new FloeAgentError(`scoreBps must be an integer 0..10000 (got ${report.scoreBps}).`, 400);
+    }
+    const resp = await this.request(
+      "POST",
+      `/v1/agents/actions/${encodeURIComponent(tag)}/outcome`,
+      { status: report.status, scoreBps: report.scoreBps, note: report.note },
+    );
+    const body = await resp.text();
+    if (!resp.ok) {
+      let parsed: unknown;
+      let parsedOk = false;
+      try {
+        parsed = JSON.parse(body);
+        parsedOk = true;
+      } catch { /* non-JSON */ }
+      const errorPayload =
+        typeof parsed === "object" && parsed !== null
+          ? parsed as { error?: unknown; message?: unknown }
+          : undefined;
+      const code = typeof errorPayload?.error === "string" ? errorPayload.error : undefined;
+      const message =
+        typeof errorPayload?.message === "string"
+          ? errorPayload.message
+          : code ?? `reportOutcome failed: ${resp.status}`;
+      throw new FloeAgentError(
+        message,
+        resp.status,
+        code,
+        body,
+        parsedOk ? parsed : undefined,
+      );
+    }
+    // A 2xx with a malformed body surfaces as a typed error, matching the
+    // SDK's other JSON APIs — never a raw SyntaxError.
+    try {
+      return JSON.parse(body) as OutcomeResult;
+    } catch {
+      throw new FloeAgentError(
+        `reportOutcome returned ${resp.status} but the body was not valid JSON.`,
+        resp.status,
+        "invalid_response_body",
+        body,
+      );
+    }
   }
 
   /**
