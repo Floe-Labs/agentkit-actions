@@ -150,3 +150,45 @@ export async function deleteAgentKey(
 export function envVarNameFor(agentName: string, facilitatorUrl: string): string {
   return scopedEnvVarName(agentName, facilitatorUrl);
 }
+
+// ── Developer key storage (`floe auth set-key`) ─────────────────────────
+//
+// The developer `floe_live_*` key is a per-API-host credential (not
+// per-agent), so it gets its own reserved account name in the same
+// keychain service. The leading "@" makes it an impossible agent name
+// (the API restricts names to alphanumeric/space/_/-), so an agent
+// registered as "developer" can never collide with it. There is no
+// env-var fallback here — the env path for a dev key IS `FLOE_API_KEY`,
+// which resolveDevAuth() checks before ever reaching the keychain.
+
+const DEV_KEY_ACCOUNT = "@developer";
+
+export async function setDevKey(
+  apiUrl: string,
+  apiKey: string,
+): Promise<{ stored: "keychain" } | { stored: "unavailable" }> {
+  const make = await tryLoadKeyring();
+  if (!make) return { stored: "unavailable" };
+  make(SERVICE, buildAccount(DEV_KEY_ACCOUNT, apiUrl)).setPassword(apiKey);
+  return { stored: "keychain" };
+}
+
+export async function getDevKey(apiUrl: string): Promise<string | null> {
+  const make = await tryLoadKeyring();
+  if (!make) return null;
+  try {
+    return make(SERVICE, buildAccount(DEV_KEY_ACCOUNT, apiUrl)).getPassword();
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteDevKey(apiUrl: string): Promise<boolean> {
+  const make = await tryLoadKeyring();
+  if (!make) return false;
+  try {
+    return make(SERVICE, buildAccount(DEV_KEY_ACCOUNT, apiUrl)).deletePassword();
+  } catch {
+    return false;
+  }
+}
