@@ -28,6 +28,20 @@ export async function runWebhooksCommand(args: string[]): Promise<void> {
       json,
     );
   }
+  if (verb === "create" && url) {
+    // The usage contract requires an HTTPS endpoint — reject malformed or
+    // plain-http URLs before auth/API calls (server-side validation remains
+    // the security boundary).
+    let protocol: string | null = null;
+    try {
+      protocol = new URL(url).protocol;
+    } catch {
+      protocol = null;
+    }
+    if (protocol !== "https:") {
+      usageError(`--url must be a valid https:// URL, got '${url}'.`, json);
+    }
+  }
   const id = pos[1];
   if ((verb === "test" || verb === "rotate-secret" || verb === "deliveries") && (!id || !/^\d+$/.test(id))) {
     usageError(`Usage: floe webhooks ${verb} <webhookId> [--json]`, json);

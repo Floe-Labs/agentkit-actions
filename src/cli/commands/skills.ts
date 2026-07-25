@@ -25,7 +25,8 @@ export async function runSkillsCommand(args: string[]): Promise<void> {
     usageError("Usage: floe skills install [--json]", json);
   }
   await runWithErrorHandling(json, async () => {
-    const res = await fetch(SKILL_URL);
+    // AbortSignal.timeout bounds the whole round-trip — headers AND body.
+    const res = await fetch(SKILL_URL, { signal: AbortSignal.timeout(30_000) });
     if (!res.ok) {
       throw new Error(`Failed to fetch ${SKILL_URL}: ${res.status} ${res.statusText}`);
     }

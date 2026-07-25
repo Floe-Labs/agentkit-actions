@@ -14,6 +14,7 @@ import {
   isInteractive,
   parseFlag,
   positionals,
+  positiveIntArg,
   printJson,
   usageError,
   usdToRawArg,
@@ -164,7 +165,7 @@ export async function runAgentKeysCommand(args: string[]): Promise<void> {
       const budget = parseFlag(args, "budget");
       if (budget) body.budgetRaw = usdToRawArg(budget, "--budget", json);
       const windowSeconds = parseFlag(args, "window-seconds");
-      if (windowSeconds) body.windowSeconds = Number(windowSeconds);
+      if (windowSeconds) body.windowSeconds = positiveIntArg(windowSeconds, "--window-seconds", json);
 
       const minted = (
         await client.request("POST", `/v1/developer/agents/${target.agentId}/keys`, { body })

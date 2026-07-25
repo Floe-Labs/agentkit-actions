@@ -26,7 +26,7 @@ import {
   type AgentRecord,
   type FloeAgentConfig,
 } from "./config.js";
-import { getAgentKey } from "./keychain.js";
+import { getAgentKey, envVarNameFor } from "./keychain.js";
 import { printBanner, printSessionInfo, printHelp } from "./display.js";
 
 export async function runInteractive(explicitAgent?: string): Promise<void> {
@@ -111,7 +111,7 @@ export async function runInteractive(explicitAgent?: string): Promise<void> {
     } else {
       spinner.warn(
         `No API key found for "${agentContext.name}". Run \`floe-agent rotate ${agentContext.name}\` or set ` +
-          `FLOE_AGENT_KEY_${agentContext.name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}.`,
+          `${envVarNameFor(agentContext.name, agentContext.facilitatorUrl)}.`,
       );
     }
   } else {
@@ -303,20 +303,10 @@ function resolveAgentContext(
   explicit?: string,
 ): AgentRecord | undefined {
   if (explicit) {
-    // Hard-fail on an unknown explicit --agent. Silently dropping back
-    // to "no agent" mode masks a typo and confuses users when paid
-    // /proxy/fetch calls then 401 with no obvious reason.
-    const resolved = config?.agents ? getAgent(config, explicit) : undefined;
-    if (!resolved) {
-      console.error(
-        chalk.red(
-          `Unknown agent "${explicit}". Run \`floe-agent agents\` to list available agents, ` +
-            `or register one with \`floe-agent register --name ${explicit}\`.`,
-        ),
-      );
-      process.exit(1);
-    }
-    return resolved;
+    // An unknown explicit --agent already hard-failed in the preflight at
+    // the top of runInteractive (before the banner/setup prompts) — the
+    // message and exit live there; here we only look the record up.
+    return config?.agents ? getAgent(config, explicit) : undefined;
   }
   if (!config?.agents) return undefined;
   if (config.activeAgent) return getAgent(config, config.activeAgent);
@@ -330,7 +320,7 @@ function getDefaultModel(provider: string): string {
     case "openai":
       return "gpt-4o";
     case "claude":
-      return "claude-sonnet-4-5-20250514";
+      return "claude-sonnet-4-5";
     case "ollama":
       return "llama3.1";
     default:

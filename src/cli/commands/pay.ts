@@ -19,8 +19,10 @@ import {
  * are paid from the agent's balance and the settled cost comes back on the
  * `x-floe-cost-usdc` header.
  *
- * An Idempotency-Key is always sent (auto-generated UUID unless
- * --idempotency-key is given) so a retried command can never double-pay.
+ * An Idempotency-Key is always sent. It is a fresh UUID per invocation, so
+ * it only dedupes in-flight retries of a single run — pass an explicit
+ * --idempotency-key (the JSON output echoes the key used) to make
+ * re-running the command safe after a failure.
  * Insufficient credit exits 5 per the CLI contract.
  */
 export async function runPayCommand(args: string[]): Promise<void> {
@@ -54,8 +56,9 @@ export async function runPayCommand(args: string[]): Promise<void> {
       payload.headers = headers;
     }
 
+    const idempotencyKey = parseFlag(args, "idempotency-key") ?? randomUUID();
     const requestHeaders: Record<string, string> = {
-      "Idempotency-Key": parseFlag(args, "idempotency-key") ?? randomUUID(),
+      "Idempotency-Key": idempotencyKey,
     };
     const taskId = parseFlag(args, "task-id");
     if (taskId) requestHeaders["X-Floe-Task-Id"] = taskId;
@@ -97,6 +100,7 @@ export async function runPayCommand(args: string[]): Promise<void> {
       printJson({
         status: res.status,
         costRaw: costRaw ?? null,
+        idempotencyKey,
         idempotentReplay: replay,
         body: res.body,
       });

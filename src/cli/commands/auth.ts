@@ -65,6 +65,7 @@ async function runAuthStatus(json: boolean): Promise<void> {
           ? { source: agent.auth.source, keyPrefix: agent.auth.keyPrefix ?? null, baseUrl: agent.baseUrl }
           : null,
       });
+      if (dev && !verified) process.exit(EXIT_ERROR);
       return;
     }
 

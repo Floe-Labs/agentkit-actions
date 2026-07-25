@@ -12,7 +12,7 @@
  * is not a TTY; NO_COLOR respected.
  */
 import { getVersion } from "./version.js";
-import { hasFlag, parseFlag, usageError } from "./shared.js";
+import { DEFAULT_API_URL, hasFlag, parseFlag, usageError } from "./shared.js";
 
 function printRootHelp(): void {
   console.log("Usage: floe <command> [options]   (also installed as `floe-agent`)\n");
@@ -62,7 +62,7 @@ function printRootHelp(): void {
   console.log("Environment variables:");
   console.log("  FLOE_API_KEY        floe_live_ dev key (management) or floe_ agent key (payments)");
   console.log("  FLOE_AGENT_KEY      floe_ agent key override for payment commands");
-  console.log("  FLOE_API_URL        Credit API base URL (default https://credit-api.floelabs.xyz)");
+  console.log(`  FLOE_API_URL        Credit API base URL (default ${DEFAULT_API_URL})`);
   console.log("  PRIVATE_KEY         Wallet key — signature auth fallback + REPL/register");
   console.log("  FLOE_FACILITATOR_URL             Default facilitator URL for `register`");
   console.log("  FLOE_AGENT_KEY_<NAME>__<HOST>    Per-agent key (keychain fallback)");
@@ -201,7 +201,7 @@ export async function main(args: string[]): Promise<void> {
     const facilitatorUrl =
       parseFlag(rest, "facilitator-url") ||
       process.env.FLOE_FACILITATOR_URL ||
-      "https://credit-api.floelabs.xyz";
+      DEFAULT_API_URL;
     const { runRegisterCommand } = await import("./commands/register.js");
     await runRegisterCommand({
       name,

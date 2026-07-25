@@ -1,6 +1,6 @@
 import chalk from "chalk";
 import { DevApiClient, requireAgentAuth, runWithErrorHandling } from "../devApiClient.js";
-import { hasFlag, parseFlag, positionals, printJson, usageError } from "../shared.js";
+import { hasFlag, parseFlag, positionals, positiveIntArg, printJson, usageError } from "../shared.js";
 
 /**
  * `floe estimate <url>` / `floe forecast <url…>` — x402 cost preflight
@@ -36,7 +36,7 @@ export async function runForecastCommand(args: string[]): Promise<void> {
   await runWithErrorHandling(json, async () => {
     const { auth, baseUrl } = await requireAgentAuth(json);
     const countFlag = parseFlag(args, "count");
-    const count = countFlag ? Number(countFlag) : undefined;
+    const count = countFlag ? positiveIntArg(countFlag, "--count", json) : undefined;
     const taskId = parseFlag(args, "task-id");
     const items = urls.map((url) => ({
       url,

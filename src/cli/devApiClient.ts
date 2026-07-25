@@ -102,7 +102,17 @@ export async function resolveDevAuth(): Promise<ResolvedAuth | null> {
   const stored = await getDevKey(apiBaseUrl());
   if (stored && classifyKey(stored) === "developer") return bearerAuth(stored, "keychain");
   const pk = process.env.PRIVATE_KEY?.trim();
-  if (pk) return walletAuth(pk);
+  if (pk) {
+    // Validate up front — a malformed key would otherwise surface later as
+    // a cryptic viem hex/private-key error from the first signed request.
+    const normalized = pk.startsWith("0x") ? pk : `0x${pk}`;
+    if (!/^0x[0-9a-fA-F]{64}$/.test(normalized)) {
+      throw new Error(
+        "PRIVATE_KEY must be a 32-byte hex string (64 hex characters, optional 0x prefix).",
+      );
+    }
+    return walletAuth(normalized);
+  }
   return null;
 }
 
@@ -233,6 +243,7 @@ export class DevApiClient {
     };
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    let text: string;
     let res: Response;
     try {
       res = await fetch(`${this.baseUrl}${path}`, {
@@ -241,10 +252,12 @@ export class DevApiClient {
         body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
         signal: controller.signal,
       });
+      // Read the body inside the try — a stalled body must still hit the
+      // timeout, so the abort signal stays armed until the read completes.
+      text = await res.text();
     } finally {
       clearTimeout(timer);
     }
-    const text = await res.text();
     let parsed: unknown = null;
     try {
       parsed = text ? JSON.parse(text) : null;

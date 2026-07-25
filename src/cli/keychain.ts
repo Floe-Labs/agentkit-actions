@@ -169,7 +169,14 @@ export async function setDevKey(
 ): Promise<{ stored: "keychain" } | { stored: "unavailable" }> {
   const make = await tryLoadKeyring();
   if (!make) return { stored: "unavailable" };
-  make(SERVICE, buildAccount(DEV_KEY_ACCOUNT, apiUrl)).setPassword(apiKey);
+  try {
+    make(SERVICE, buildAccount(DEV_KEY_ACCOUNT, apiUrl)).setPassword(apiKey);
+  } catch {
+    // Locked/unavailable secret service with the native module loaded —
+    // same "unavailable" answer as the get/delete siblings, so callers
+    // surface the FLOE_API_KEY fallback instead of a raw keyring error.
+    return { stored: "unavailable" };
+  }
   return { stored: "keychain" };
 }
 

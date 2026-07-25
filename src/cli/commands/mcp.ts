@@ -66,16 +66,36 @@ export async function runMcpCommand(args: string[]): Promise<void> {
   });
 }
 
+/** Headless installs get a hard deadline — nothing is streamed, so a hung
+ * npx would otherwise wedge the CLI invisibly. Interactive runs stream the
+ * installer's output (and may legitimately prompt), so Ctrl-C stays the
+ * escape hatch there. */
+const ADD_MCP_TIMEOUT_MS = 300_000;
+
 /** Spawn `npx -y add-mcp <url>`; resolve with its exit code (1 on spawn error). */
 function runAddMcp(json: boolean): Promise<number> {
   return new Promise((resolve) => {
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    const settle = (code: number) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(code);
+    };
     const child = spawn("npx", ["-y", "add-mcp", REMOTE_MCP_URL], {
       // In --json mode swallow the installer's output so stdout stays
       // machine-readable; interactively, stream it through.
       stdio: json ? "ignore" : "inherit",
       shell: process.platform === "win32",
     });
-    child.on("error", () => resolve(1));
-    child.on("exit", (code) => resolve(code ?? 1));
+    if (json) {
+      timer = setTimeout(() => {
+        child.kill("SIGTERM");
+        settle(1);
+      }, ADD_MCP_TIMEOUT_MS);
+    }
+    child.on("error", () => settle(1));
+    child.on("exit", (code) => settle(code ?? 1));
   });
 }

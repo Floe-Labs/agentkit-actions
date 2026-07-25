@@ -362,7 +362,7 @@ commands never pay its startup cost under `npx`.
 
 ### Command tree
 
-```
+```text
 floe status                          auth + capabilities probe + balances
 floe auth status|set-key             dev key via FLOE_API_KEY env or OS keychain
 floe agents create|list|get|pause|resume|close    agent lifecycle (dev key)
@@ -398,7 +398,7 @@ floe run | register | use | rotate | revoke | open-credit-line   legacy wallet f
 Management commands (`agents`, `keys`, `policy`, …) resolve, in order:
 `FLOE_API_KEY` when it holds a `floe_live_` developer key → the key stored by
 `floe auth set-key` → EIP-191 wallet-signature headers when `PRIVATE_KEY` is
-set. None of the above exits `4` with a pointer to
+set. If none of the above is present, the command exits `4` with a pointer to
 [dev-dashboard.floelabs.xyz](https://dev-dashboard.floelabs.xyz). Payment
 commands (`pay`, `estimate`, `forecast`) prefer `FLOE_AGENT_KEY`, then the
 active agent's keychain key, then `FLOE_API_KEY` when it is a `floe_` agent
@@ -412,6 +412,7 @@ which plane it drives (the API refuses agent keys on `/v1/developer/*`).
 | `FLOE_API_KEY` | CLI credential: `floe_live_` drives management commands, `floe_` drives payment commands; also the agent key for `FloeAgent` |
 | `FLOE_AGENT_KEY` | `floe_` agent-key override for payment commands |
 | `FLOE_API_URL` | Credit API base URL (default `https://credit-api.floelabs.xyz`) |
+| `FLOE_FACILITATOR_URL` | Default facilitator URL for `floe register` |
 | `FLOE_FACILITATOR_API_KEY` | Required for x402 + agent-awareness actions |
 | `PRIVATE_KEY` | Wallet private key (self-custody + signature-auth fallback) |
 | `CDP_API_KEY_NAME` | Coinbase CDP API key name |

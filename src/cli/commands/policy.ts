@@ -11,6 +11,7 @@ import {
   hasFlag,
   parseFlag,
   positionals,
+  positiveIntArg,
   printJson,
   usageError,
   usdToRawArg,
@@ -133,7 +134,7 @@ export async function runPolicyCommand(args: string[]): Promise<void> {
       const windowKind = parseFlag(args, "window-kind");
       if (windowKind) body.windowKind = windowKind;
       const windowSeconds = parseFlag(args, "window-seconds");
-      if (windowSeconds) body.windowSeconds = Number(windowSeconds);
+      if (windowSeconds) body.windowSeconds = positiveIntArg(windowSeconds, "--window-seconds", json);
       const label = parseFlag(args, "label");
       if (label) body.label = label;
       const action = parseFlag(args, "action");

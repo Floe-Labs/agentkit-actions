@@ -1,6 +1,6 @@
 import chalk from "chalk";
 import { DevApiClient, requireDevAuth, runWithErrorHandling } from "../devApiClient.js";
-import { hasFlag, parseFlag, positionals, printJson, usageError } from "../shared.js";
+import { hasFlag, isInteractive, parseFlag, positionals, printJson, usageError } from "../shared.js";
 
 /**
  * `floe keys create|list|rotate|revoke` — developer (`floe_live_*`) keys via
@@ -90,6 +90,19 @@ export async function runDevKeysCommand(args: string[]): Promise<void> {
         );
         console.log("");
         return;
+      }
+      // Revoking a developer key is irreversible (and revoking your only one
+      // locks you out) — confirm interactively, like the agent-key flow.
+      if (isInteractive() && !json) {
+        const { confirm } = await import("@inquirer/prompts");
+        const ok = await confirm({
+          message: `Revoke developer key ${keyId}? This cannot be undone.`,
+          default: false,
+        });
+        if (!ok) {
+          console.log(chalk.dim("Aborted."));
+          return;
+        }
       }
       await client.request("DELETE", `/v1/developer/keys/${keyId}`);
       if (json) printJson({ revoked: true, keyId: Number(keyId) });

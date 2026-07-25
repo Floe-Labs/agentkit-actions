@@ -30,7 +30,9 @@ export function parseFlag(args: string[], name: string): string | undefined {
   const eq = args.find((a) => a.startsWith(`--${name}=`));
   if (eq) return eq.slice(name.length + 3);
   const idx = args.indexOf(`--${name}`);
-  if (idx >= 0 && idx + 1 < args.length) return args[idx + 1];
+  if (idx >= 0 && idx + 1 < args.length && !args[idx + 1].startsWith("--")) {
+    return args[idx + 1];
+  }
   return undefined;
 }
 
@@ -133,6 +135,19 @@ export function usdToRawArg(usdAmount: string, flag: string, json: boolean): str
   } catch (err) {
     usageError(`${flag}: ${(err as Error).message}`, json);
   }
+}
+
+/**
+ * Positive-integer flag value off the command line. Bare Number() turns
+ * malformed input into NaN, which JSON.stringify serializes as null — the
+ * API then rejects it with an opaque validation error. Fail fast with a
+ * usage error (exit 2) instead, mirroring usdToRawArg.
+ */
+export function positiveIntArg(value: string, flag: string, json: boolean): number {
+  if (!/^\d+$/.test(value) || Number(value) === 0) {
+    usageError(`${flag} must be a positive integer, got '${value}'.`, json);
+  }
+  return Number(value);
 }
 
 /** "5000000" → "$5.00". Display-quality only — keeps 2..6 decimals as needed. */

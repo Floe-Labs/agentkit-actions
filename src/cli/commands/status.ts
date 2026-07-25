@@ -15,8 +15,9 @@ import { apiBaseUrl, hasFlag, printJson, rawToUsd } from "../shared.js";
  * live on this deployment, (3) what money is there to spend.
  *
  * Prefers the developer plane; falls back to the agent plane so a runtime
- * key alone still gets a meaningful answer. `/v1/capabilities` may not be
- * deployed yet — a 404 there reports `capabilities: null`, never a failure.
+ * key alone still gets a meaningful answer. The `/v1/capabilities` probe is
+ * deliberately non-fatal: any non-200 (404 on older deployments, but also
+ * auth/server errors) or network failure reports `capabilities: null`.
  */
 export async function runStatusCommand(args: string[]): Promise<void> {
   const json = hasFlag(args, "json");
@@ -86,7 +87,7 @@ async function devStatus(auth: ResolvedAuth, json: boolean): Promise<void> {
   }
   console.log(`  ${chalk.bold("Agents:")}     ${Array.isArray(profile.agents) ? profile.agents.length : 0}`);
   console.log(
-    `  ${chalk.bold("Features:")}   ${capabilities ? JSON.stringify(capabilities) : chalk.dim("unknown (/v1/capabilities not deployed)")}`,
+    `  ${chalk.bold("Features:")}   ${capabilities ? JSON.stringify(capabilities) : chalk.dim("unknown (/v1/capabilities unavailable on this deployment)")}`,
   );
   if (balances && typeof balances === "object") {
     const b = balances as { totalUsdc?: string; total?: { usdcRaw?: string } };
@@ -128,7 +129,7 @@ async function agentStatus(auth: ResolvedAuth, baseUrl: string, json: boolean): 
   console.log(`  ${chalk.bold("Auth:")}       agent (${auth.source}${auth.keyPrefix ? `, ${auth.keyPrefix}` : ""})`);
   console.log(`  ${chalk.bold("API:")}        ${baseUrl}`);
   console.log(
-    `  ${chalk.bold("Features:")}   ${capabilities ? JSON.stringify(capabilities) : chalk.dim("unknown (/v1/capabilities not deployed)")}`,
+    `  ${chalk.bold("Features:")}   ${capabilities ? JSON.stringify(capabilities) : chalk.dim("unknown (/v1/capabilities unavailable on this deployment)")}`,
   );
   console.log(`  ${chalk.bold("Balance:")}    ${JSON.stringify(balance)}`);
   if (creditRemaining) {
