@@ -40,14 +40,18 @@ export async function runAgentsApiCommand(verb: string, args: string[]): Promise
     const client = new DevApiClient(auth);
 
     if (verb === "create") {
-      const maxRateBpsFlag = parseFlag(args, "max-rate-bps");
-      const expiryDaysFlag = parseFlag(args, "expiry-days");
       const body: Record<string, unknown> = {
         name,
         // Server defaults: omitted borrowLimitRaw → wallet-funded (PAYG).
-        maxRateBps: maxRateBpsFlag ? positiveIntArg(maxRateBpsFlag, "--max-rate-bps", json) : 1500,
+        // Presence-based: a supplied-but-empty flag is a usage error, not
+        // a silent fallthrough to the default.
+        maxRateBps: hasFlag(args, "max-rate-bps")
+          ? positiveIntArg(parseFlag(args, "max-rate-bps") ?? "", "--max-rate-bps", json)
+          : 1500,
         expirySeconds:
-          (expiryDaysFlag ? positiveIntArg(expiryDaysFlag, "--expiry-days", json) : 90) * 86400,
+          (hasFlag(args, "expiry-days")
+            ? positiveIntArg(parseFlag(args, "expiry-days") ?? "", "--expiry-days", json)
+            : 90) * 86400,
       };
       const borrowLimit = parseFlag(args, "borrow-limit");
       if (borrowLimit) body.borrowLimitRaw = usdToRawArg(borrowLimit, "--borrow-limit", json);

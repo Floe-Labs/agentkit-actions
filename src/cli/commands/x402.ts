@@ -35,8 +35,9 @@ export async function runForecastCommand(args: string[]): Promise<void> {
   }
   await runWithErrorHandling(json, async () => {
     const { auth, baseUrl } = await requireAgentAuth(json);
-    const countFlag = parseFlag(args, "count");
-    const count = countFlag ? positiveIntArg(countFlag, "--count", json) : undefined;
+    const count = hasFlag(args, "count")
+      ? positiveIntArg(parseFlag(args, "count") ?? "", "--count", json)
+      : undefined;
     const taskId = parseFlag(args, "task-id");
     const items = urls.map((url) => ({
       url,

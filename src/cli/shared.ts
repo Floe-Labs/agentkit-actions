@@ -144,10 +144,11 @@ export function usdToRawArg(usdAmount: string, flag: string, json: boolean): str
  * usage error (exit 2) instead, mirroring usdToRawArg.
  */
 export function positiveIntArg(value: string, flag: string, json: boolean): number {
-  if (!/^\d+$/.test(value) || Number(value) === 0) {
+  const parsed = Number(value);
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(parsed) || parsed <= 0) {
     usageError(`${flag} must be a positive integer, got '${value}'.`, json);
   }
-  return Number(value);
+  return parsed;
 }
 
 /** "5000000" → "$5.00". Display-quality only — keeps 2..6 decimals as needed. */

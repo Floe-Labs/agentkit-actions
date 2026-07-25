@@ -133,8 +133,15 @@ export async function runPolicyCommand(args: string[]): Promise<void> {
       if (matchKind) body.matchKind = matchKind;
       const windowKind = parseFlag(args, "window-kind");
       if (windowKind) body.windowKind = windowKind;
-      const windowSeconds = parseFlag(args, "window-seconds");
-      if (windowSeconds) body.windowSeconds = positiveIntArg(windowSeconds, "--window-seconds", json);
+      // Presence-based: an explicitly supplied-but-empty flag is a usage
+      // error, not a silent no-op.
+      if (hasFlag(args, "window-seconds")) {
+        body.windowSeconds = positiveIntArg(
+          parseFlag(args, "window-seconds") ?? "",
+          "--window-seconds",
+          json,
+        );
+      }
       const label = parseFlag(args, "label");
       if (label) body.label = label;
       const action = parseFlag(args, "action");
