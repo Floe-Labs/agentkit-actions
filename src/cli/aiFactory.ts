@@ -30,7 +30,7 @@ export async function createAIModel(config: AIConfig): Promise<any> {
         );
       }
       const anthropic = createAnthropic({ apiKey });
-      return anthropic(config.model || "claude-sonnet-4-5-20250514");
+      return anthropic(config.model || "claude-sonnet-4-5");
     }
     case "ollama": {
       try {

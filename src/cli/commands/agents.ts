@@ -1,20 +1,43 @@
 import chalk from "chalk";
 import { loadConfig, listAgents } from "../config.js";
 import { getAgentKey } from "../keychain.js";
+import { printJson } from "../shared.js";
 
-export async function runListCommand(): Promise<void> {
+/**
+ * Local-registry listing (`floe agents` with no subcommand): what's in
+ * .floe-agent.json plus key presence. Server-side inventory lives under
+ * `floe agents list`.
+ */
+export async function runListCommand(json = false): Promise<void> {
   const config = loadConfig();
   if (!config) {
-    console.log(chalk.dim("No config found. Run `floe-agent register --name <name>` first."));
+    if (json) {
+      printJson({ agents: [], activeAgent: null });
+    } else {
+      console.log(chalk.dim("No config found. Run `floe-agent register --name <name>` first."));
+    }
     return;
   }
   const agents = listAgents(config);
   if (agents.length === 0) {
-    console.log(chalk.dim("No agents registered."));
+    if (json) {
+      printJson({ agents: [], activeAgent: config.activeAgent ?? null });
+    } else {
+      console.log(chalk.dim("No agents registered."));
+    }
     return;
   }
 
   const active = config.activeAgent;
+  if (json) {
+    const rows = [];
+    for (const a of agents) {
+      const key = await getAgentKey(a.name, a.facilitatorUrl);
+      rows.push({ ...a, keyPresent: Boolean(key) });
+    }
+    printJson({ agents: rows, activeAgent: active ?? null });
+    return;
+  }
   console.log("");
   console.log(chalk.bold("  Registered Floe agents:"));
   console.log("");
