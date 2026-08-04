@@ -364,14 +364,16 @@ Networks: Base Mainnet (8453) · Base Sepolia (84532).
 ## CLI
 
 ```bash
-npm i -g floe-agent          # installs BOTH bins: `floe` and `floe-agent`
-floe status --json           # auth check + capabilities + balance snapshot
+npm i -g floe-agent          # installs the `floe-agent` bin
+floe-agent status --json     # auth check + capabilities + balance snapshot
 ```
 
-`floe` is the platform CLI: everything the dev-dashboard can do, from the
-terminal, with a single `FLOE_API_KEY`. The interactive lending REPL
-(`floe run`, the historical default) is unchanged and lazy-loaded — management
-commands never pay its startup cost under `npx`.
+> The `floe` bin name now belongs to the standalone platform CLI,
+> [`@floelabs/cli`](https://github.com/Floe-Labs/floe-cli) (`npx @floelabs/cli init`).
+> This package's CLI is invoked as `floe-agent`; the commands below are otherwise
+> unchanged. The interactive lending REPL (`floe-agent run`, the historical
+> default) is lazy-loaded — management commands never pay its startup cost
+> under `npx`.
 
 ### Command tree
 

@@ -1,6 +1,6 @@
 {
   "name": "floe-agent",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Coinbase AgentKit ActionProvider for Floe DeFi lending protocol",
   "license": "MIT",
   "repository": {
@@ -27,8 +27,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "floe-agent": "dist/cli/bin.js",
-    "floe": "dist/cli/bin.js"
+    "floe-agent": "dist/cli/bin.js"
   },
   "exports": {
     ".": {
