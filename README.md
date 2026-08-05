@@ -364,35 +364,37 @@ Networks: Base Mainnet (8453) · Base Sepolia (84532).
 ## CLI
 
 ```bash
-npm i -g floe-agent          # installs BOTH bins: `floe` and `floe-agent`
-floe status --json           # auth check + capabilities + balance snapshot
+npm i -g floe-agent          # installs the `floe-agent` bin
+floe-agent status --json     # auth check + capabilities + balance snapshot
 ```
 
-`floe` is the platform CLI: everything the dev-dashboard can do, from the
-terminal, with a single `FLOE_API_KEY`. The interactive lending REPL
-(`floe run`, the historical default) is unchanged and lazy-loaded — management
-commands never pay its startup cost under `npx`.
+> The `floe` bin name now belongs to the standalone platform CLI,
+> [`@floelabs/cli`](https://github.com/Floe-Labs/floe-cli) (`npx @floelabs/cli init`).
+> This package's CLI is invoked as `floe-agent`; the commands below are otherwise
+> unchanged. The interactive lending REPL (`floe-agent run`, the historical
+> default) is lazy-loaded — management commands never pay its startup cost
+> under `npx`.
 
 ### Command tree
 
 ```text
-floe status                          auth + capabilities probe + balances
-floe auth status|set-key             dev key via FLOE_API_KEY env or OS keychain
-floe agents create|list|get|pause|resume|close    agent lifecycle (dev key)
-floe agents keys create|rotate|revoke [--budget <usd>]   runtime floe_ keys
-floe keys create|list|rotate|revoke  developer floe_live_ keys
-floe policy list|set|delete|reset [--agent <id>|--team]  spend policies
-floe limit get|set|clear [--agent <id>]                  session spend cap
-floe allowlist mode|add|remove|list [--agent <id>]       merchant allowlist
-floe balance                         developer rollup / agent balance
-floe fund <agentId>                  deposit address + funding instructions
-floe estimate <url> | floe forecast <url>…   x402 cost preflight (agent key)
-floe pay <url> [--method --body --header]    paid x402 call via /v1/proxy/fetch
-floe models | floe usage | floe activity     catalog / analytics / feed
-floe webhooks create|list|test|rotate-secret|deliveries
-floe skills install                  floe-budget SKILL.md → .claude/skills + ~/.agents/skills
-floe mcp install                     npx -y add-mcp https://mcp.floelabs.xyz/mcp
-floe run | register | use | rotate | revoke | open-credit-line   legacy wallet flows
+floe-agent status                          auth + capabilities probe + balances
+floe-agent auth status|set-key             dev key via FLOE_API_KEY env or OS keychain
+floe-agent agents create|list|get|pause|resume|close    agent lifecycle (dev key)
+floe-agent agents keys create|rotate|revoke [--budget <usd>]   runtime floe_ keys
+floe-agent keys create|list|rotate|revoke  developer floe_live_ keys
+floe-agent policy list|set|delete|reset [--agent <id>|--team]  spend policies
+floe-agent limit get|set|clear [--agent <id>]                  session spend cap
+floe-agent allowlist mode|add|remove|list [--agent <id>]       merchant allowlist
+floe-agent balance                         developer rollup / agent balance
+floe-agent fund <agentId>                  deposit address + funding instructions
+floe-agent estimate <url> | floe-agent forecast <url>…   x402 cost preflight (agent key)
+floe-agent pay <url> [--method --body --header]    paid x402 call via /v1/proxy/fetch
+floe-agent models | floe-agent usage | floe-agent activity     catalog / analytics / feed
+floe-agent webhooks create|list|test|rotate-secret|deliveries
+floe-agent skills install                  floe-budget SKILL.md → .claude/skills + ~/.agents/skills
+floe-agent mcp install                     npx -y add-mcp https://mcp.floelabs.xyz/mcp
+floe-agent run | register | use | rotate | revoke | open-credit-line   legacy wallet flows
 ```
 
 ### Conventions
@@ -410,7 +412,7 @@ floe run | register | use | rotate | revoke | open-credit-line   legacy wallet f
 
 Management commands (`agents`, `keys`, `policy`, …) resolve, in order:
 `FLOE_API_KEY` when it holds a `floe_live_` developer key → the key stored by
-`floe auth set-key` → EIP-191 wallet-signature headers when `PRIVATE_KEY` is
+`floe-agent auth set-key` → EIP-191 wallet-signature headers when `PRIVATE_KEY` is
 set. If none of the above is present, the command exits `4` with a pointer to
 [dev-dashboard.floelabs.xyz](https://dev-dashboard.floelabs.xyz). Payment
 commands (`pay`, `estimate`, `forecast`) prefer `FLOE_AGENT_KEY`, then the
@@ -425,7 +427,7 @@ which plane it drives (the API refuses agent keys on `/v1/developer/*`).
 | `FLOE_API_KEY` | CLI credential: `floe_live_` drives management commands, `floe_` drives payment commands; also the agent key for `FloeAgent` |
 | `FLOE_AGENT_KEY` | `floe_` agent-key override for payment commands |
 | `FLOE_API_URL` | Credit API base URL (default `https://credit-api.floelabs.xyz`) |
-| `FLOE_FACILITATOR_URL` | Default facilitator URL for `floe register` |
+| `FLOE_FACILITATOR_URL` | Default facilitator URL for `floe-agent register` |
 | `FLOE_FACILITATOR_API_KEY` | Required for x402 + agent-awareness actions |
 | `PRIVATE_KEY` | Wallet private key (self-custody + signature-auth fallback) |
 | `CDP_API_KEY_NAME` | Coinbase CDP API key name |
