@@ -14,7 +14,7 @@ import {
 } from "../shared.js";
 
 /**
- * `floe pay <url>` — the felt demo: one real x402 call through
+ * `floe-agent pay <url>` — the felt demo: one real x402 call through
  * POST /v1/proxy/fetch (agent key). Free URLs pass through; 402-gated ones
  * are paid from the agent's balance and the settled cost comes back on the
  * `x-floe-cost-usdc` header.
@@ -30,7 +30,7 @@ export async function runPayCommand(args: string[]): Promise<void> {
   const url = positionals(args)[0];
   if (!url) {
     usageError(
-      'Usage: floe pay <url> [--method <M>] [--body <raw>] [--header "K: V"]… ' +
+      'Usage: floe-agent pay <url> [--method <M>] [--body <raw>] [--header "K: V"]… ' +
         "[--task-id <id>] [--idempotency-key <k>] [--json]",
       json,
     );

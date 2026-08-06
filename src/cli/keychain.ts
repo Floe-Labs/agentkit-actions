@@ -151,7 +151,7 @@ export function envVarNameFor(agentName: string, facilitatorUrl: string): string
   return scopedEnvVarName(agentName, facilitatorUrl);
 }
 
-// ── Developer key storage (`floe auth set-key`) ─────────────────────────
+// ── Developer key storage (`floe-agent auth set-key`) ─────────────────────────
 //
 // The developer `floe_live_*` key is a per-API-host credential (not
 // per-agent), so it gets its own reserved account name in the same

@@ -17,7 +17,7 @@ import {
 } from "../shared.js";
 
 /**
- * `floe allowlist mode|add|remove|list` — merchant allowlist. Entries are
+ * `floe-agent allowlist mode|add|remove|list` — merchant allowlist. Entries are
  * ordinary policy rows (kind='api' hosts / kind='vendor' payees, always
  * capped via limitRaw); `mode` flips which proxy gates enforce them.
  * Agent key → self-service routes; dev key → --agent <id> operator routes.
@@ -65,7 +65,7 @@ export async function runAllowlistCommand(args: string[]): Promise<void> {
       const newMode = pos[1];
       // Usage errors beat auth errors — validate before resolving credentials.
       if (newMode !== undefined && !MODES.includes(newMode)) {
-        usageError(`Usage: floe allowlist mode [${MODES.join("|")}] [--agent <id>] [--json]`, json);
+        usageError(`Usage: floe-agent allowlist mode [${MODES.join("|")}] [--agent <id>] [--json]`, json);
       }
       const route = await resolveRoute(args, json);
       if (newMode === undefined) {
@@ -87,7 +87,7 @@ export async function runAllowlistCommand(args: string[]): Promise<void> {
         console.log(
           chalk.yellow(
             `  Warning: no active entries for ${res.warning.dimensions.join(", ")} — ` +
-              "every call on that dimension now fails closed. Add entries with `floe allowlist add`.",
+              "every call on that dimension now fails closed. Add entries with `floe-agent allowlist add`.",
           ),
         );
       }
@@ -102,7 +102,7 @@ export async function runAllowlistCommand(args: string[]): Promise<void> {
       const matchKey = parseFlag(args, "match") ?? pos[1];
       if (!matchKey) {
         usageError(
-          "Usage: floe allowlist add <host|payee> [--kind api|vendor] (--limit <usd> | --limit-raw <raw>) " +
+          "Usage: floe-agent allowlist add <host|payee> [--kind api|vendor] (--limit <usd> | --limit-raw <raw>) " +
             "[--match-kind host_exact|host_suffix|recipient] [--agent <id>] [--json]",
           json,
         );
@@ -125,7 +125,7 @@ export async function runAllowlistCommand(args: string[]): Promise<void> {
     if (verb === "remove") {
       const policyId = pos[1];
       if (!policyId || !/^\d+$/.test(policyId)) {
-        usageError("Usage: floe allowlist remove <policyId> [--agent <id>] [--json]", json);
+        usageError("Usage: floe-agent allowlist remove <policyId> [--agent <id>] [--json]", json);
       }
       const route = await resolveRoute(args, json);
       await route.client.request("DELETE", `${route.policiesPath}/${policyId}`);
@@ -159,6 +159,6 @@ export async function runAllowlistCommand(args: string[]): Promise<void> {
       return;
     }
 
-    usageError("Usage: floe allowlist <mode|add|remove|list> [--agent <id>] [--json]", json);
+    usageError("Usage: floe-agent allowlist <mode|add|remove|list> [--agent <id>] [--json]", json);
   });
 }

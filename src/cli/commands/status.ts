@@ -10,7 +10,7 @@ import {
 import { apiBaseUrl, hasFlag, printJson, rawToUsd } from "../shared.js";
 
 /**
- * `floe status` — the one-shot health probe an agent runs after setup:
+ * `floe-agent status` — the one-shot health probe an agent runs after setup:
  * (1) does my credential authenticate, (2) which gateway/proxy features are
  * live on this deployment, (3) what money is there to spend.
  *
@@ -95,7 +95,7 @@ async function devStatus(auth: ResolvedAuth, json: boolean): Promise<void> {
     if (totalRaw) {
       console.log(`  ${chalk.bold("Balances:")}   ${rawToUsd(totalRaw)} USDC total`);
     } else {
-      console.log(`  ${chalk.bold("Balances:")}   ${chalk.dim("see `floe balance --json`")}`);
+      console.log(`  ${chalk.bold("Balances:")}   ${chalk.dim("see `floe-agent balance --json`")}`);
     }
   }
   console.log("");

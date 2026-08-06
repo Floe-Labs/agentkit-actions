@@ -2,10 +2,10 @@
  * CLI entrypoint + subcommand dispatcher. Deliberately lightweight: every
  * command module — and above all the REPL, which drags in @coinbase/agentkit
  * and the ai SDK — is loaded through dynamic import() at its dispatch site,
- * so `floe status` / `--help` under npx never pay the REPL's startup cost.
+ * so `floe-agent status` / `--help` under npx never pay the REPL's startup cost.
  *
- * Installed as BOTH `floe-agent` (historical) and `floe` (the platform CLI
- * name agents.md and the dashboard teach). Same binary, same commands.
+ * Installed as `floe-agent`. The bare `floe` bin belongs to the standalone
+ * platform CLI, @floelabs/cli — this package released the name in 0.6.1.
  *
  * Conventions: `--json` on every command; exit codes 0 ok / 1 error /
  * 2 usage / 4 auth required / 5 payment required; no prompts when stdout
@@ -15,13 +15,13 @@ import { getVersion } from "./version.js";
 import { DEFAULT_API_URL, hasFlag, parseFlag, usageError } from "./shared.js";
 
 function printRootHelp(): void {
-  console.log("Usage: floe <command> [options]   (also installed as `floe-agent`)\n");
+  console.log("Usage: floe-agent <command> [options]\n");
   console.log("The Floe platform CLI — agent credit lines, x402 payments, spend policy.\n");
   console.log("Setup & status:");
   console.log("  status              Auth check + capabilities + balance snapshot");
   console.log("  auth status|set-key Manage the developer key (env FLOE_API_KEY or OS keychain)");
   console.log("  mcp install         Install the Floe MCP server into your AI tools");
-  console.log("  skills install      Install the floe-budget skill (.claude/skills + ~/.agents/skills)");
+  console.log("  skills install      Install the Floe skill (.claude/skills + ~/.agents/skills)");
   console.log("");
   console.log("Agents & keys (developer key):");
   console.log("  agents create|list|get|pause|resume|close   Agent lifecycle (API)");
@@ -196,7 +196,7 @@ export async function main(args: string[]): Promise<void> {
   if (sub === "register") {
     const name = parseFlag(rest, "name");
     if (!name) {
-      usageError("Usage: floe register --name <name> [--borrow-limit <usd>] [--label <l>]", json);
+      usageError("Usage: floe-agent register --name <name> [--borrow-limit <usd>] [--label <l>]", json);
     }
     const facilitatorUrl =
       parseFlag(rest, "facilitator-url") ||
@@ -220,7 +220,7 @@ export async function main(args: string[]): Promise<void> {
   if (sub === "use") {
     const name = rest[0];
     if (!name) {
-      usageError("Usage: floe use <agent name>", json);
+      usageError("Usage: floe-agent use <agent name>", json);
     }
     const { runUseCommand } = await import("./commands/use.js");
     runUseCommand(name);
@@ -229,7 +229,7 @@ export async function main(args: string[]): Promise<void> {
   if (sub === "rotate" || sub === "revoke") {
     const name = rest[0];
     if (!name || name.startsWith("--")) {
-      usageError(`Usage: floe ${sub} <agentId|name> [--json]`, json);
+      usageError(`Usage: floe-agent ${sub} <agentId|name> [--json]`, json);
     }
     // Dev-key path when headless credentials exist; interactive wallet flow
     // otherwise. (`--facilitator-url` remains an opt-in override for the
@@ -241,7 +241,7 @@ export async function main(args: string[]): Promise<void> {
   if (sub === "open-credit-line") {
     const name = parseFlag(rest, "name") ?? rest[0];
     if (!name) {
-      usageError("Usage: floe open-credit-line --name <name> --deposit <usdc>", json);
+      usageError("Usage: floe-agent open-credit-line --name <name> --deposit <usdc>", json);
     }
     const rawLtv = parseFlag(rest, "max-ltv-bps");
     const rawRate = parseFlag(rest, "max-rate-bps");
@@ -257,9 +257,9 @@ export async function main(args: string[]): Promise<void> {
 
   // A stray word is a typo, not a REPL request: an agent that mistypes a
   // verb gets exit 2 and the command list, never an interactive prompt it
-  // cannot answer. Bare `floe` and `floe --agent x` still open the REPL.
+  // cannot answer. Bare `floe-agent` and `floe-agent --agent x` still open the REPL.
   if (sub !== undefined && sub !== "run" && !sub.startsWith("-")) {
-    usageError(`Unknown command: ${sub}. Run \`floe --help\` for the command list.`, json);
+    usageError(`Unknown command: ${sub}. Run \`floe-agent --help\` for the command list.`, json);
   }
 
   // Default: interactive REPL. Treat `run` as an explicit alias. The REPL

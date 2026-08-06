@@ -11,7 +11,7 @@ import {
 } from "../shared.js";
 
 /**
- * `floe mcp install` — hand off to the universal installer
+ * `floe-agent mcp install` — hand off to the universal installer
  * (`npx -y add-mcp <url>`), which detects Claude Code / Cursor / VS Code /
  * Codex configs and writes the entry. If the installer is unavailable or
  * fails, print the manual remote-MCP config + the `claude mcp add`
@@ -35,7 +35,7 @@ export async function runMcpCommand(args: string[]): Promise<void> {
   const json = hasFlag(args, "json");
   const verb = positionals(args)[0];
   if (verb !== "install") {
-    usageError("Usage: floe mcp install [--json]", json);
+    usageError("Usage: floe-agent mcp install [--json]", json);
   }
   await runWithErrorHandling(json, async () => {
     const exitCode = await runAddMcp(json);

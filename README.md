@@ -19,7 +19,8 @@ One key for your agent's whole vendor bill — LLM, voice, telephony, search, da
 | **Agent** — Claude Code / Cursor does the setup | paste: `Read https://dev-dashboard.floelabs.xyz/agents.md and set up Floe for this project.` |
 | **Skill** — install the Floe agent skill | `npx skills add floe-labs/agent-skills` |
 | **MCP** — hosted MCP server (65 tools) | `npx -y add-mcp https://mcp.floelabs.xyz/mcp` |
-| **NPM** — the CLI + SDK | `npm i -g floe-agent` |
+| **CLI** — mint a key + print the base-URL swap | `npx @floelabs/cli init` |
+| **NPM** — the SDK + `floe-agent` CLI | `npm i -g floe-agent` |
 
 New accounts get a **$3 Welcome Credit (300 API credits)** — no card. [Set up with your AI tools →](https://floe-labs.gitbook.io/docs/getting-started/setup-with-ai-tools) · [Get a key →](https://dev-dashboard.floelabs.xyz)
 
@@ -392,7 +393,7 @@ floe-agent estimate <url> | floe-agent forecast <url>…   x402 cost preflight (
 floe-agent pay <url> [--method --body --header]    paid x402 call via /v1/proxy/fetch
 floe-agent models | floe-agent usage | floe-agent activity     catalog / analytics / feed
 floe-agent webhooks create|list|test|rotate-secret|deliveries
-floe-agent skills install                  floe-budget SKILL.md → .claude/skills + ~/.agents/skills
+floe-agent skills install                  Floe skill (Floe-Labs/agent-skills) → .claude/skills + ~/.agents/skills
 floe-agent mcp install                     npx -y add-mcp https://mcp.floelabs.xyz/mcp
 floe-agent run | register | use | rotate | revoke | open-credit-line   legacy wallet flows
 ```
