@@ -21,13 +21,13 @@ import {
 } from "../shared.js";
 
 /**
- * `floe agents keys create|rotate|revoke <agent>` — the generalized,
+ * `floe-agent agents keys create|rotate|revoke <agent>` — the generalized,
  * dev-key-first version of the wallet-signature `rotate`/`revoke` flow.
  * <agent> is a numeric agentId or a local-registry name; when a local
  * record matches we keep it (and the OS keychain) in sync exactly like
  * the legacy commands did.
  *
- * Top-level `floe rotate|revoke <name>` route here when headless
+ * Top-level `floe-agent rotate|revoke <name>` route here when headless
  * credentials exist, and fall back to the interactive wallet flow
  * (commands/rotate.ts / revoke.ts) otherwise — see main.ts.
  */
@@ -55,8 +55,8 @@ function resolveTarget(nameOrId: string): TargetAgent {
   const record = config ? getAgent(config, nameOrId) : undefined;
   if (!record) {
     throw new Error(
-      `Unknown agent "${nameOrId}". Pass a numeric agentId (see \`floe agents list\`) ` +
-        `or a name from the local registry (\`floe agents\`).`,
+      `Unknown agent "${nameOrId}". Pass a numeric agentId (see \`floe-agent agents list\`) ` +
+        `or a name from the local registry (\`floe-agent agents\`).`,
     );
   }
   return { agentId: record.agentId, record };
@@ -130,7 +130,7 @@ async function findCurrentKey(
       ? keys.find((k) => k.keyPrefix === target.record?.keyPrefix)
       : undefined) ?? keys[0];
   if (!current) {
-    throw new Error("No active key found for this agent. Mint one with `floe agents keys create`.");
+    throw new Error("No active key found for this agent. Mint one with `floe-agent agents keys create`.");
   }
   return current;
 }
@@ -142,7 +142,7 @@ export async function runAgentKeysCommand(args: string[]): Promise<void> {
   const nameOrId = pos[1];
   if (!verb || !["create", "rotate", "revoke"].includes(verb) || !nameOrId) {
     usageError(
-      "Usage: floe agents keys <create|rotate|revoke> <agentId|name> [--budget <usd>] [--label <l>] [--key-id <id>] [--json]",
+      "Usage: floe-agent agents keys <create|rotate|revoke> <agentId|name> [--budget <usd>] [--label <l>] [--key-id <id>] [--json]",
       json,
     );
   }
@@ -239,7 +239,7 @@ export async function runAgentKeysCommand(args: string[]): Promise<void> {
 }
 
 /**
- * Top-level `floe rotate|revoke <name>` alias: dev-key/PRIVATE_KEY path when
+ * Top-level `floe-agent rotate|revoke <name>` alias: dev-key/PRIVATE_KEY path when
  * headless credentials exist, interactive wallet flow otherwise (unchanged
  * legacy behavior — prompts for the wallet and signs the management call).
  */

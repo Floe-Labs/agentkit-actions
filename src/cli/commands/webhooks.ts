@@ -3,7 +3,7 @@ import { DevApiClient, requireDevAuth, runWithErrorHandling } from "../devApiCli
 import { hasFlag, parseFlag, positionals, printJson, usageError } from "../shared.js";
 
 /**
- * `floe webhooks create|list|test|rotate-secret|deliveries` — developer
+ * `floe-agent webhooks create|list|test|rotate-secret|deliveries` — developer
  * webhook CRUD via /v1/developer/webhooks. The event catalog spans loan
  * lifecycle (loan.health_warning / expiry_warning / liquidated / repaid)
  * plus the onboarding events (agent.created, key.created, key.rotated,
@@ -17,13 +17,13 @@ export async function runWebhooksCommand(args: string[]): Promise<void> {
   // Usage errors beat auth errors: validate the invocation before resolving
   // credentials so a malformed call exits 2 with or without a key set.
   if (!verb || !["create", "list", "test", "rotate-secret", "deliveries"].includes(verb)) {
-    usageError("Usage: floe webhooks <create|list|test|rotate-secret|deliveries> [id] [--json]", json);
+    usageError("Usage: floe-agent webhooks <create|list|test|rotate-secret|deliveries> [id] [--json]", json);
   }
   const url = parseFlag(args, "url") ?? (verb === "create" ? pos[1] : undefined);
   const events = parseFlag(args, "events");
   if (verb === "create" && (!url || !events)) {
     usageError(
-      "Usage: floe webhooks create --url <https-url> --events <e1,e2> " +
+      "Usage: floe-agent webhooks create --url <https-url> --events <e1,e2> " +
         "[--scope global|wallet|loan --scope-value <v>] [--description <d>] [--json]",
       json,
     );
@@ -44,7 +44,7 @@ export async function runWebhooksCommand(args: string[]): Promise<void> {
   }
   const id = pos[1];
   if ((verb === "test" || verb === "rotate-secret" || verb === "deliveries") && (!id || !/^\d+$/.test(id))) {
-    usageError(`Usage: floe webhooks ${verb} <webhookId> [--json]`, json);
+    usageError(`Usage: floe-agent webhooks ${verb} <webhookId> [--json]`, json);
   }
   await runWithErrorHandling(json, async () => {
     const auth = await requireDevAuth(json);

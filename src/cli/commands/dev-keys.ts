@@ -3,7 +3,7 @@ import { DevApiClient, requireDevAuth, runWithErrorHandling } from "../devApiCli
 import { hasFlag, isInteractive, parseFlag, positionals, printJson, usageError } from "../shared.js";
 
 /**
- * `floe keys create|list|rotate|revoke` — developer (`floe_live_*`) keys via
+ * `floe-agent keys create|list|rotate|revoke` — developer (`floe_live_*`) keys via
  * /v1/developer/keys. Max 5 per account, plaintext shown once, admin-role
  * routes (a bare dev key resolves to owner, so key-only auth passes).
  */
@@ -12,13 +12,13 @@ export async function runDevKeysCommand(args: string[]): Promise<void> {
   const pos = positionals(args);
   const verb = pos[0];
   // Usage errors beat auth errors: validate the invocation before resolving
-  // credentials so `floe keys frobnicate` exits 2 with or without a key set.
+  // credentials so `floe-agent keys frobnicate` exits 2 with or without a key set.
   if (!verb || !["create", "list", "rotate", "revoke"].includes(verb)) {
-    usageError("Usage: floe keys <create|list|rotate|revoke> [keyId] [--label <l>] [--json]", json);
+    usageError("Usage: floe-agent keys <create|list|rotate|revoke> [keyId] [--label <l>] [--json]", json);
   }
   const keyId = pos[1];
   if ((verb === "rotate" || verb === "revoke") && (!keyId || !/^\d+$/.test(keyId))) {
-    usageError(`Usage: floe keys ${verb} <keyId> [--json] (find ids via \`floe keys list\`)`, json);
+    usageError(`Usage: floe-agent keys ${verb} <keyId> [--json] (find ids via \`floe-agent keys list\`)`, json);
   }
   await runWithErrorHandling(json, async () => {
     const auth = await requireDevAuth(json);
@@ -43,7 +43,7 @@ export async function runDevKeysCommand(args: string[]): Promise<void> {
       console.log(
         `  ${chalk.bold("Developer Key:")} ${chalk.yellow(minted.key)}  ${chalk.dim("(shown ONCE)")}`,
       );
-      console.log(chalk.dim("  Save it with `floe auth set-key <key>` or export FLOE_API_KEY."));
+      console.log(chalk.dim("  Save it with `floe-agent auth set-key <key>` or export FLOE_API_KEY."));
       if (permissions === "read") {
         // The API enforces this now (403 read_only_key on any write verb).
         console.log(chalk.dim("  Read-only key: GET/HEAD/OPTIONS only — writes are refused."));
@@ -62,7 +62,7 @@ export async function runDevKeysCommand(args: string[]): Promise<void> {
       }
       const keys = res.keys ?? [];
       if (keys.length === 0) {
-        console.log(chalk.dim("No developer keys. Mint one with `floe keys create`."));
+        console.log(chalk.dim("No developer keys. Mint one with `floe-agent keys create`."));
         return;
       }
       console.log("");

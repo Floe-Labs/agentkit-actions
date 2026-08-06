@@ -8,7 +8,7 @@ import {
 import { hasFlag, printJson } from "../shared.js";
 
 /**
- * `floe balance` — a dev key gets the account-wide rollup
+ * `floe-agent balance` — a dev key gets the account-wide rollup
  * (/v1/developer/balances: developer wallet + agent wallets + API
  * credits); an agent key gets its own view (/v1/agents/balance).
  */

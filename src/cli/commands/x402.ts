@@ -3,7 +3,7 @@ import { DevApiClient, requireAgentAuth, runWithErrorHandling } from "../devApiC
 import { hasFlag, parseFlag, positionals, positiveIntArg, printJson, usageError } from "../shared.js";
 
 /**
- * `floe estimate <url>` / `floe forecast <url…>` — x402 cost preflight
+ * `floe-agent estimate <url>` / `floe-agent forecast <url…>` — x402 cost preflight
  * (agent key). estimate prices one call; forecast batches up to 50 URLs
  * through the policy preflight so an agent can budget a whole task before
  * spending a cent.
@@ -11,7 +11,7 @@ import { hasFlag, parseFlag, positionals, positiveIntArg, printJson, usageError 
 export async function runEstimateCommand(args: string[]): Promise<void> {
   const json = hasFlag(args, "json");
   const url = positionals(args)[0];
-  if (!url) usageError("Usage: floe estimate <url> [--method <M>] [--json]", json);
+  if (!url) usageError("Usage: floe-agent estimate <url> [--method <M>] [--json]", json);
   await runWithErrorHandling(json, async () => {
     const { auth, baseUrl } = await requireAgentAuth(json);
     const body: Record<string, unknown> = { url };
@@ -29,7 +29,7 @@ export async function runForecastCommand(args: string[]): Promise<void> {
   const urls = positionals(args);
   if (urls.length === 0) {
     usageError(
-      "Usage: floe forecast <url> [<url>…] [--count <n per url>] [--task-id <id>] [--json]",
+      "Usage: floe-agent forecast <url> [<url>…] [--count <n per url>] [--task-id <id>] [--json]",
       json,
     );
   }

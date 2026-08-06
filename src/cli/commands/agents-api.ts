@@ -17,11 +17,11 @@ import {
 } from "../shared.js";
 
 /**
- * `floe agents create|list|get|pause|resume|close` — the dev-key-backed
- * lifecycle commands against /v1/developer/agents. Unlike `floe register`
+ * `floe-agent agents create|list|get|pause|resume|close` — the dev-key-backed
+ * lifecycle commands against /v1/developer/agents. Unlike `floe-agent register`
  * (wallet-signature flow that also mints a key and writes the local
  * registry), these are thin API calls an agent can run headlessly with
- * only FLOE_API_KEY set. Key minting lives in `floe agents keys …`.
+ * only FLOE_API_KEY set. Key minting lives in `floe-agent agents keys …`.
  */
 export async function runAgentsApiCommand(verb: string, args: string[]): Promise<void> {
   const json = hasFlag(args, "json");
@@ -29,11 +29,11 @@ export async function runAgentsApiCommand(verb: string, args: string[]): Promise
   // credentials so a malformed call exits 2 with or without a key set.
   const name = parseFlag(args, "name") ?? positionals(args)[0];
   if (verb === "create" && !name) {
-    usageError("Usage: floe agents create --name <name> [--borrow-limit <usd>] [--json]", json);
+    usageError("Usage: floe-agent agents create --name <name> [--borrow-limit <usd>] [--json]", json);
   }
   const agentId = positionals(args)[0];
   if (["get", "pause", "resume", "close"].includes(verb) && !agentId) {
-    usageError(`Usage: floe agents ${verb} <agentId> [--json]`, json);
+    usageError(`Usage: floe-agent agents ${verb} <agentId> [--json]`, json);
   }
   await runWithErrorHandling(json, async () => {
     const auth = await requireDevAuth(json);
@@ -80,13 +80,13 @@ export async function runAgentsApiCommand(verb: string, args: string[]): Promise
       console.log("");
       // The welcome-credit amount lives in the API (and has already moved
       // once), so state the fact, not a number the CLI can't verify;
-      // `floe balance` prints the amount that actually landed.
+      // `floe-agent balance` prints the amount that actually landed.
       if (created.welcomeCreditTxHash) {
         console.log(
           chalk.dim("  A welcome credit was auto-disbursed — it is immediately spendable."),
         );
       }
-      console.log(chalk.dim(`  Mint a runtime key next: floe agents keys create ${created.agentId} --budget 5`));
+      console.log(chalk.dim(`  Mint a runtime key next: floe-agent agents keys create ${created.agentId} --budget 5`));
       console.log(chalk.dim(`  Fund beyond the welcome credit at ${DASHBOARD_URL} (USDC on Base, chain 8453).`));
       console.log("");
       return;
@@ -102,7 +102,7 @@ export async function runAgentsApiCommand(verb: string, args: string[]): Promise
         return;
       }
       if (agents.length === 0) {
-        console.log(chalk.dim("No agents. Create one with `floe agents create --name <name>`."));
+        console.log(chalk.dim("No agents. Create one with `floe-agent agents create --name <name>`."));
         return;
       }
       console.log("");
@@ -142,7 +142,7 @@ export async function runAgentsApiCommand(verb: string, args: string[]): Promise
       else console.log(chalk.green(`  Agent ${agentId} closed: ${JSON.stringify(res)}`));
       return;
     }
-    usageError("Usage: floe agents <create|list|get|pause|resume|close|keys> …", json);
+    usageError("Usage: floe-agent agents <create|list|get|pause|resume|close|keys> …", json);
   });
 }
 

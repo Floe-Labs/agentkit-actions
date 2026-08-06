@@ -18,8 +18,8 @@ import {
 } from "../shared.js";
 
 /**
- * `floe limit get|set|clear` — the session spend cap. Same dual-surface
- * routing as `floe policy`: an agent key edits its own cap via
+ * `floe-agent limit get|set|clear` — the session spend cap. Same dual-surface
+ * routing as `floe-agent policy`: an agent key edits its own cap via
  * /v1/agents/spend-limit; a dev key needs --agent <id> and goes through
  * /v1/developer/agents/:id/spend-limit. PUT restarts the session window.
  */
@@ -67,7 +67,7 @@ export async function runLimitCommand(args: string[]): Promise<void> {
     }
     if (verb === "set") {
       const usd = pos[1] ?? parseFlag(args, "limit");
-      if (!usd) usageError("Usage: floe limit set <usd> [--agent <id>] [--json]", json);
+      if (!usd) usageError("Usage: floe-agent limit set <usd> [--agent <id>] [--json]", json);
       const limitRaw = usdToRawArg(usd, "limit set", json);
       const route = await resolveRoute(args, json);
       const res = (await route.client.request("PUT", route.basePath, { body: { limitRaw } })).body;
@@ -82,6 +82,6 @@ export async function runLimitCommand(args: string[]): Promise<void> {
       else console.log(chalk.green("  Session spend limit cleared."));
       return;
     }
-    usageError("Usage: floe limit <get|set|clear> [<usd>] [--agent <id>] [--json]", json);
+    usageError("Usage: floe-agent limit <get|set|clear> [<usd>] [--agent <id>] [--json]", json);
   });
 }

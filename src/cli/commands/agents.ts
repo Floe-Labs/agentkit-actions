@@ -4,9 +4,9 @@ import { getAgentKey } from "../keychain.js";
 import { printJson } from "../shared.js";
 
 /**
- * Local-registry listing (`floe agents` with no subcommand): what's in
+ * Local-registry listing (`floe-agent agents` with no subcommand): what's in
  * .floe-agent.json plus key presence. Server-side inventory lives under
- * `floe agents list`.
+ * `floe-agent agents list`.
  */
 export async function runListCommand(json = false): Promise<void> {
   const config = loadConfig();

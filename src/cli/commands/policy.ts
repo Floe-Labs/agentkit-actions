@@ -18,7 +18,7 @@ import {
 } from "../shared.js";
 
 /**
- * `floe policy list|set|delete|reset` — spend-policy CRUD across three
+ * `floe-agent policy list|set|delete|reset` — spend-policy CRUD across three
  * surfaces that share one body shape (policy-schemas.ts server-side):
  *
  *   --agent <id>  → /v1/developer/agents/:id/policies  (dev key)
@@ -105,7 +105,7 @@ export async function runPolicyCommand(args: string[]): Promise<void> {
       const validKinds = ["task", "api", "vendor", "session"];
       if (!kind || !validKinds.includes(kind)) {
         usageError(
-          "Usage: floe policy set --kind <task|api|vendor|session> --match <key> " +
+          "Usage: floe-agent policy set --kind <task|api|vendor|session> --match <key> " +
             "(--limit <usd> | --limit-raw <raw>) [--window-kind once|rolling] [--window-seconds <s>] " +
             "[--label <l>] [--action block|suspend_agent] [--agent <id>|--team] [--json]",
           json,
@@ -114,7 +114,7 @@ export async function runPolicyCommand(args: string[]): Promise<void> {
       const route = await resolveRoute(args, json);
       if (kind === "session" && !route.team) {
         usageError(
-          "kind=session is team-scope only (`--team`). For a per-agent session cap use `floe limit set`.",
+          "kind=session is team-scope only (`--team`). For a per-agent session cap use `floe-agent limit set`.",
           json,
         );
       }
@@ -156,7 +156,7 @@ export async function runPolicyCommand(args: string[]): Promise<void> {
     if (verb === "delete" || verb === "reset") {
       const policyId = pos[1];
       if (!policyId || !/^\d+$/.test(policyId)) {
-        usageError(`Usage: floe policy ${verb} <policyId> [--agent <id>|--team] [--json]`, json);
+        usageError(`Usage: floe-agent policy ${verb} <policyId> [--agent <id>|--team] [--json]`, json);
       }
       // Usage errors beat auth errors — --team reset is invalid regardless
       // of credentials (the team surface has no reset endpoint).
@@ -181,6 +181,6 @@ export async function runPolicyCommand(args: string[]): Promise<void> {
       return;
     }
 
-    usageError("Usage: floe policy <list|set|delete|reset> [--agent <id>|--team] [--json]", json);
+    usageError("Usage: floe-agent policy <list|set|delete|reset> [--agent <id>|--team] [--json]", json);
   });
 }

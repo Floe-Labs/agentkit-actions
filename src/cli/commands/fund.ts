@@ -3,7 +3,7 @@ import { DevApiClient, requireDevAuth, runWithErrorHandling } from "../devApiCli
 import { DASHBOARD_URL, hasFlag, positionals, printJson, usageError } from "../shared.js";
 
 /**
- * `floe fund <agentId>` — print machine-readable funding instructions and
+ * `floe-agent fund <agentId>` — print machine-readable funding instructions and
  * stop. Funding is the human's half of the contract: the CLI hands over
  * the deposit address; the human moves USDC (dashboard onramp/transfer or
  * an external wallet).
@@ -16,7 +16,7 @@ export async function runFundCommand(args: string[]): Promise<void> {
   const json = hasFlag(args, "json");
   const agentId = positionals(args)[0];
   if (!agentId || !/^\d+$/.test(agentId)) {
-    usageError("Usage: floe fund <agentId> [--json]", json);
+    usageError("Usage: floe-agent fund <agentId> [--json]", json);
   }
   await runWithErrorHandling(json, async () => {
     const auth = await requireDevAuth(json);

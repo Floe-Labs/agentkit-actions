@@ -22,9 +22,10 @@ Additional internal security reviews have been conducted for the operator delega
 |-----------|---------|-----------|
 | Smart contracts (Base mainnet) | Upgrade #12 | ✅ |
 | Credit API | 0.1.x | ✅ |
-| AgentKit (npm `floe-agent`) | 0.2.x | ✅ |
-| AgentKit (PyPI `floe-agentkit-actions`) | 0.2.x | ✅ |
-| MCP Server (`@floelabs/mcp-server`) | 0.1.x | ✅ |
+| Platform CLI (npm `@floelabs/cli`) | 0.1.x | ✅ |
+| AgentKit (npm `floe-agent`) | 0.6.x | ✅ |
+| AgentKit (PyPI `floe-agentkit-actions`) | 0.5.x | ✅ |
+| MCP Server (`@floelabs/mcp-server`) | 0.3.x | ✅ |
 
 ## Responsible Disclosure
 

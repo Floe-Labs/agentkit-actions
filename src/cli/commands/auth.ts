@@ -18,7 +18,7 @@ import {
   EXIT_ERROR,
 } from "../shared.js";
 
-const USAGE = "Usage: floe auth <status|set-key> [key] [--json]";
+const USAGE = "Usage: floe-agent auth <status|set-key> [key] [--json]";
 
 export async function runAuthCommand(args: string[]): Promise<void> {
   const json = hasFlag(args, "json");
@@ -35,7 +35,7 @@ export async function runAuthCommand(args: string[]): Promise<void> {
 }
 
 /**
- * `floe auth status` — report which credential each plane would use and
+ * `floe-agent auth status` — report which credential each plane would use and
  * verify the developer one against the API. Exit 4 when nothing resolves.
  */
 async function runAuthStatus(json: boolean): Promise<void> {
@@ -92,7 +92,7 @@ async function runAuthStatus(json: boolean): Promise<void> {
 }
 
 /**
- * `floe auth set-key [key]` — persist a developer key in the OS keychain,
+ * `floe-agent auth set-key [key]` — persist a developer key in the OS keychain,
  * scoped to the active API host. Prompts only in an interactive session.
  */
 async function runSetKey(keyArg: string | undefined, json: boolean): Promise<void> {
@@ -100,7 +100,7 @@ async function runSetKey(keyArg: string | undefined, json: boolean): Promise<voi
     let key = keyArg?.trim();
     if (!key) {
       if (!isInteractive() || json) {
-        usageError("Usage: floe auth set-key <floe_live_...> (no TTY — pass the key as an argument)", json);
+        usageError("Usage: floe-agent auth set-key <floe_live_...> (no TTY — pass the key as an argument)", json);
       }
       const { password } = await import("@inquirer/prompts");
       key = (await password({ message: "Developer API key (floe_live_...):" })).trim();
@@ -117,7 +117,7 @@ async function runSetKey(keyArg: string | undefined, json: boolean): Promise<voi
     }
 
     // Verify before storing — a typo'd key caught here beats one caught on
-    // the next `floe agents create`.
+    // the next `floe-agent agents create`.
     const client = new DevApiClient({
       source: "keychain",
       headers: async () => ({ Authorization: `Bearer ${key}`, "Content-Type": "application/json" }),

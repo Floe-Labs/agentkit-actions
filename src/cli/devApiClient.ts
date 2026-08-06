@@ -8,7 +8,7 @@
  *      key. A `floe_` agent key in that variable is a RUNTIME credential:
  *      the API 403s it on the whole /v1/developer surface, so it is routed
  *      to the payment plane below instead of producing a confusing 403.
- *   2. The dev key stored in the OS keychain by `floe auth set-key`.
+ *   2. The dev key stored in the OS keychain by `floe-agent auth set-key`.
  *   3. EIP-191 wallet-signature headers when `PRIVATE_KEY` is set — the
  *      key-less bootstrap path (same message format as signatureAuth.ts,
  *      but signed directly with viem so no AgentKit wallet provider is
@@ -41,7 +41,7 @@ const FETCH_TIMEOUT_MS = 30_000;
 
 export type AuthSource =
   | "env" // FLOE_API_KEY
-  | "keychain" // dev key stored by `floe auth set-key`
+  | "keychain" // dev key stored by `floe-agent auth set-key`
   | "wallet" // PRIVATE_KEY wallet-signature headers
   | "agent-env" // FLOE_AGENT_KEY
   | "agent-keychain"; // active agent's key from the OS keychain
@@ -166,10 +166,10 @@ export function authRequired(json: boolean, kind: "developer" | "agent"): never 
       ? (envIsAgentKey
           ? "FLOE_API_KEY holds an agent key (floe_…), which cannot call developer routes. "
           : "No developer credentials found. ") +
-        "Set FLOE_API_KEY to a floe_live_… developer key, run `floe auth set-key`, " +
+        "Set FLOE_API_KEY to a floe_live_… developer key, run `floe-agent auth set-key`, " +
         "or set PRIVATE_KEY for wallet-signature auth."
       : "No agent credentials found. Set FLOE_AGENT_KEY (floe_… agent key), " +
-        "mint one with `floe agents keys create <agent>`, or set FLOE_API_KEY " +
+        "mint one with `floe-agent agents keys create <agent>`, or set FLOE_API_KEY " +
         "to a floe_ agent key.";
   const hint = `Get a developer key at ${DASHBOARD_URL}`;
   if (json) {
