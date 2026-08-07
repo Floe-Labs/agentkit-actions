@@ -16,7 +16,7 @@ import { DEFAULT_API_URL, hasFlag, parseFlag, usageError } from "./shared.js";
 
 function printRootHelp(): void {
   console.log("Usage: floe-agent <command> [options]\n");
-  console.log("The Floe platform CLI — agent credit lines, x402 payments, spend policy.\n");
+  console.log("The Floe AgentKit-companion CLI — agent credit lines, x402 payments, spend policy.\n");
   console.log("Setup & status:");
   console.log("  status              Auth check + capabilities + balance snapshot");
   console.log("  auth status|set-key Manage the developer key (env FLOE_API_KEY or OS keychain)");
