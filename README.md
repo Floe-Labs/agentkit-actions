@@ -19,7 +19,7 @@ One key for your agent's whole vendor bill — LLM, voice, telephony, search, da
 | **Agent** — Claude Code / Cursor does the setup | paste: `Read https://dev-dashboard.floelabs.xyz/agents.md and set up Floe for this project.` |
 | **Skill** — install the Floe agent skill | `npx skills add floe-labs/agent-skills` |
 | **MCP** — hosted MCP server (65 tools) | `npx -y add-mcp https://mcp.floelabs.xyz/mcp` |
-| **CLI** — mint a key + print the base-URL swap | `npx @floelabs/cli init` |
+| **CLI** — the full platform from your terminal: agents, keys, budgets, billing | `npx @floelabs/cli init` |
 | **NPM** — the SDK + `floe-agent` CLI | `npm i -g floe-agent` |
 
 New accounts get a **$3 Welcome Credit (300 API credits)** — no card. [Set up with your AI tools →](https://floe-labs.gitbook.io/docs/getting-started/setup-with-ai-tools) · [Get a key →](https://dev-dashboard.floelabs.xyz)
@@ -369,12 +369,13 @@ npm i -g floe-agent          # installs the `floe-agent` bin
 floe-agent status --json     # auth check + capabilities + balance snapshot
 ```
 
-> The `floe` bin name now belongs to the standalone platform CLI,
-> [`@floelabs/cli`](https://github.com/Floe-Labs/floe-cli) (`npx @floelabs/cli init`).
-> This package's CLI is invoked as `floe-agent`; the commands below are otherwise
-> unchanged. The interactive lending REPL (`floe-agent run`, the historical
-> default) is lazy-loaded — management commands never pay its startup cost
-> under `npx`.
+> The `floe` bin name belongs to the standalone platform CLI,
+> [`@floelabs/cli`](https://github.com/Floe-Labs/floe-cli) — the full platform from
+> your terminal: setup, agents, keys, budgets, policies, billing, funds, phone, and
+> metered calls (`npx @floelabs/cli init`). This package's CLI is invoked as
+> `floe-agent`: the AgentKit-companion CLI for the agent-runtime SDK. The
+> interactive lending REPL (`floe-agent run`, the historical default) is
+> lazy-loaded — management commands never pay its startup cost under `npx`.
 
 ### Command tree
 
