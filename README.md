@@ -40,7 +40,7 @@ Two layers in one package:
 | Layer | What it is | For |
 |---|---|---|
 | **`FloeAgent`** ⭐ | High-level runtime client. No wallet, no chain knowledge. Dollars in, dollars out. | Most agent developers |
-| **`floeActionProvider()` + `x402ActionProvider()`** | 54 AgentKit actions for self-custody, lending, and framework integrations. Python parity ships as `floe-agentkit-actions`. | Self-custody / on-chain use cases |
+| **`floeActionProvider()` + `x402ActionProvider()`** | 55 AgentKit actions for self-custody, lending, and framework integrations. Python parity ships as `floe-agentkit-actions`. | Self-custody / on-chain use cases |
 
 ## Install
 
@@ -162,7 +162,7 @@ const { text } = await generateText({
 ---
 
 <details>
-<summary><b>Advanced: self-custody, lending & flash-loan actions (54 total)</b></summary>
+<summary><b>Advanced: self-custody, lending & flash-loan actions (55 total)</b></summary>
 
 > These actions are for **self-custody and on-chain use cases** (managing your
 > own wallet, lending against deposits, MEV/arb). If you're building a standard
@@ -170,8 +170,8 @@ const { text } = await generateText({
 > this section.
 
 `floeActionProvider()` exposes 30 lending actions; `x402ActionProvider()`
-exposes 24 (6 x402 credit-delegation + 9 agent-awareness + 5 merchant-allowlist
-+ 2 credit-facility helpers + 2 Floe Inference). Register both for the full 54-action surface.
+exposes 25 (6 x402 credit-delegation + 10 agent-awareness + 5 merchant-allowlist
++ 2 credit-facility helpers + 2 Floe Inference). Register both for the full 55-action surface.
 
 ### Install
 
@@ -268,7 +268,7 @@ a formatted result including the tx hash.
 check balance. The deployed receiver address is stored on the provider instance
 and auto-reused; override with `receiverAddress`.
 
-## `x402ActionProvider()` — 24 actions
+## `x402ActionProvider()` — 25 actions
 
 All x402 + agent-awareness + allowlist actions require `facilitatorApiKey`
 configured on `x402ActionProvider`.
@@ -297,7 +297,7 @@ const agentkit = await AgentKit.from({
 | `x402_get_balance` | Check x402 credit balance |
 | `x402_get_transactions` | List recent x402 payment transactions |
 
-### Agent-awareness (9)
+### Agent-awareness (10)
 
 | Action | Description |
 |---|---|
@@ -306,6 +306,7 @@ const agentkit = await AgentKit.from({
 | `get_spend_limit` / `set_spend_limit` / `clear_spend_limit` | Read / set / remove a session USDC ceiling |
 | `list_credit_thresholds` / `register_credit_threshold` / `delete_credit_threshold` | Webhook triggers on utilization (cap: 20 per agent) |
 | `estimate_x402_cost` | Preflight an x402 URL — cost + reflection (`willExceedAvailable` / `willExceedSpendLimit`) against credit, no payment |
+| `get_coverage_score` | Coverage Score — share of known spend Floe enforces pre-call vs reconciled (off-path) vs dark (optional `days`, default 30) |
 
 > **Decision-loop pattern (AgentKit):** `estimate_x402_cost` → check
 > `willExceedAvailable` / `willExceedSpendLimit` → conditionally `x402_fetch`.
