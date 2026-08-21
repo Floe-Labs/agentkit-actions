@@ -171,6 +171,16 @@ export const EstimateX402CostSchema = z.object({
     .describe("HTTP method (default GET)."),
 });
 
+export const GetCoverageScoreSchema = z.object({
+  days: z
+    .number()
+    .int()
+    .positive()
+    .max(365)
+    .default(30)
+    .describe("Lookback window in days for the coverage calculation (default 30, max 365)."),
+});
+
 // ── Merchant allowlist schemas (D1 feature; TS parity, D9) ──────────────────
 // An allowlist "entry" is an ordinary agent policy row (kind='api' for hosts,
 // kind='vendor' for payees) that doubles as "allowed AND capped". The mode flag
@@ -995,8 +1005,9 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
   }
 
   // ════════════════════════════════════════════════════════════════════════
-  // AGENT AWARENESS (9) — answer "do I have credit?", "is this call worth
-  // it?", "where am I in the loan lifecycle?" before committing capital.
+  // AGENT AWARENESS (10) — answer "do I have credit?", "is this call worth
+  // it?", "where am I in the loan lifecycle?", "how much of my spend does Floe
+  // actually enforce?" before committing capital.
   // All require facilitatorApiKey to be set on the provider config.
   // ════════════════════════════════════════════════════════════════════════
 
@@ -1368,6 +1379,49 @@ export class X402ActionProvider extends ActionProvider<EvmWalletProvider> {
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") return "Request timed out.";
       return `Error estimating cost: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  // ── get_coverage_score ──────────────────────────────────────────────────
+
+  @CreateAction({
+    name: "get_coverage_score",
+    description:
+      "Report the agent's Coverage Score: the share of its known spend that Floe enforces pre-call, " +
+      "vs reconciled (off-path spend Floe recorded after the fact but did not gate) vs dark (spend Floe " +
+      "never saw). Optional `days` window (default 30). Use to reason about how much of your own spend is " +
+      "actually enforced. Pairs with floe-guard's opt-in ledger sync, which feeds the reconciled bucket.",
+    schema: GetCoverageScoreSchema,
+  })
+  async getCoverageScore(
+    _walletProvider: EvmWalletProvider,
+    args: z.infer<typeof GetCoverageScoreSchema>,
+  ): Promise<string> {
+    try {
+      const resp = await this.facilitatorFetch(`/v1/agents/coverage?days=${args.days}`);
+      const result = await this.readJsonOrError(resp);
+      if (!result.ok) return `Error: ${result.msg}`;
+      const d = result.data as {
+        coverageScoreBps: number;
+        days: number;
+        preCallEnforceableBps: number;
+        reconciledBps: number;
+        darkBps: number;
+      };
+      return [
+        "## Coverage Score\n",
+        `**Coverage**: ${formatBps(BigInt(d.coverageScoreBps))} (last ${d.days} days)`,
+        "",
+        `**Pre-call enforceable**: ${formatBps(BigInt(d.preCallEnforceableBps))}`,
+        `**Reconciled (off-path)**: ${formatBps(BigInt(d.reconciledBps))}`,
+        `**Dark**: ${formatBps(BigInt(d.darkBps))}`,
+        "",
+        "_Reconciled = off-path spend Floe recorded after the fact but did not gate. " +
+          "Coverage is a budget measure, not a wallet balance._",
+      ].join("\n");
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") return "Request timed out.";
+      return `Error fetching coverage: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 

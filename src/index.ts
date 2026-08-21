@@ -25,6 +25,7 @@ export {
   RegisterCreditThresholdSchema,
   DeleteCreditThresholdSchema,
   EstimateX402CostSchema,
+  GetCoverageScoreSchema,
   SetAllowlistModeSchema,
   GetAllowlistModeSchema,
   AddAllowlistEntrySchema,
