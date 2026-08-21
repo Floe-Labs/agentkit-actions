@@ -2,9 +2,9 @@
 
 [![npm version](https://img.shields.io/npm/v/floe-agent)](https://www.npmjs.com/package/floe-agent) · [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) · [![Base Mainnet](https://img.shields.io/badge/Base-Mainnet-0052FF)](https://basescan.org/address/0x17946cD3e180f82e632805e5549EC913330Bb175)
 
-**The spend layer for AI agents — TypeScript SDK.** Pay any of 2,000+ vendor API
-services through one endpoint, with budgets your agent can reason about.
-Walletless. No crypto required.
+**Spend controls for Voice AI — TypeScript SDK.** One key that pays any x402
+vendor API — telephony, STT, LLM, TTS, search, data — through one endpoint, with
+budgets your agent can reason about. Walletless. No crypto required.
 
 [Website](https://floelabs.xyz) · [Docs](https://floe-labs.gitbook.io/docs) · [Dashboard](https://dev-dashboard.floelabs.xyz) · [Python SDK](https://github.com/Floe-Labs/agentkit-actions-py)
 
