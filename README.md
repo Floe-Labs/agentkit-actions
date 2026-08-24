@@ -2,8 +2,11 @@
 
 [![npm version](https://img.shields.io/npm/v/floe-agent)](https://www.npmjs.com/package/floe-agent) · [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) · [![Base Mainnet](https://img.shields.io/badge/Base-Mainnet-0052FF)](https://basescan.org/address/0x17946cD3e180f82e632805e5549EC913330Bb175)
 
-**Cost-truth and margin for voice AI — TypeScript SDK.** One key that pays any x402
-vendor API — telephony, STT, LLM, TTS, search, data — through one endpoint, with
+**The TypeScript SDK for Floe — know what every AI call really costs.** Floe costs each
+call the moment it ends across every vendor — telephony, STT, LLM, TTS, search, data — on
+one ledger, ties the spend to the client and campaign, and shows your margin per contract;
+then you bill your own customers off those actuals through your own Stripe. This SDK is the
+programmatic surface: one key that pays any x402 vendor API through one endpoint, with
 budgets your agent can reason about. Walletless. No crypto required.
 
 [Website](https://floelabs.xyz) · [Docs](https://floe-labs.gitbook.io/docs) · [Dashboard](https://dev-dashboard.floelabs.xyz) · [Python SDK](https://github.com/Floe-Labs/agentkit-actions-py)
