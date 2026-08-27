@@ -1,6 +1,6 @@
 # floe-agent
 
-[![npm version](https://img.shields.io/npm/v/floe-agent)](https://www.npmjs.com/package/floe-agent) · [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) · [![Base Mainnet](https://img.shields.io/badge/Base-Mainnet-0052FF)](https://basescan.org/address/0x17946cD3e180f82e632805e5549EC913330Bb175)
+[![npm version](https://img.shields.io/npm/v/floe-agent)](https://www.npmjs.com/package/floe-agent) · [![npm downloads](https://img.shields.io/npm/dm/floe-agent)](https://www.npmjs.com/package/floe-agent) · [![CI](https://github.com/Floe-Labs/agentkit-actions/actions/workflows/ci.yml/badge.svg)](https://github.com/Floe-Labs/agentkit-actions/actions/workflows/ci.yml) · [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) · [![Base Mainnet](https://img.shields.io/badge/Base-Mainnet-0052FF)](https://basescan.org/address/0x17946cD3e180f82e632805e5549EC913330Bb175)
 
 **The TypeScript SDK for Floe — know what every AI call really costs.** Floe costs each
 call the moment it ends across every vendor — telephony, STT, LLM, TTS, search, data — on
