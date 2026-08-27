@@ -9,7 +9,7 @@ then you bill your own customers off those actuals through your own Stripe. This
 programmatic surface: one key that pays any x402 vendor API through one endpoint, with
 budgets your agent can reason about. Walletless. No crypto required.
 
-[Website](https://floelabs.xyz) · [Docs](https://floe-labs.gitbook.io/docs) · [Dashboard](https://dev-dashboard.floelabs.xyz) · [Python SDK](https://github.com/Floe-Labs/agentkit-actions-py)
+[Website](https://floefinance.com) · [Docs](https://floe-labs.gitbook.io/docs) · [Dashboard](https://dev-dashboard.floelabs.xyz) · [Python SDK](https://github.com/Floe-Labs/agentkit-actions-py)
 
 ---
 
@@ -470,12 +470,12 @@ agent-awareness), `schemas.ts` (Zod input schemas), `cli/` (interactive REPL).
 Floe ships the spend layer first and builds credit on top of it.
 
 - **Working capital / credit lines** — *in development.*
-- **Unsecured / receivables-backed credit** — *in development.* Email hello@floelabs.xyz for the design-partner program.
+- **Unsecured / receivables-backed credit** — *in development.* Email hello@floefinance.com for the design-partner program.
 - **Portable ERC-8004 credit record** — *in development.*
 
 ## Links
 
-[Website](https://floelabs.xyz) · [Docs](https://floe-labs.gitbook.io/docs) · [Python SDK](https://github.com/Floe-Labs/agentkit-actions-py) · [MCP server](https://github.com/Floe-Labs/floe-mcp-server) · [Examples](https://github.com/Floe-Labs/floe-cookbook)
+[Website](https://floefinance.com) · [Docs](https://floe-labs.gitbook.io/docs) · [Python SDK](https://github.com/Floe-Labs/agentkit-actions-py) · [MCP server](https://github.com/Floe-Labs/floe-mcp-server) · [Examples](https://github.com/Floe-Labs/floe-cookbook)
 
 ## License
 
