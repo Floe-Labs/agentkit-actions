@@ -4,7 +4,7 @@
 
 If you discover a security vulnerability in any Floe Labs repository, **do not open a public issue.** Instead:
 
-1. **Email:** [security@floelabs.xyz](mailto:security@floelabs.xyz)
+1. **Email:** [hello@floefinance.com](mailto:hello@floefinance.com)
 2. **Include:** description of the vulnerability, steps to reproduce, and potential impact
 3. **Response time:** We will acknowledge receipt within 48 hours and provide a detailed response within 7 business days
 
