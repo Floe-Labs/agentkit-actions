@@ -45,6 +45,13 @@ Two layers in one package:
 | **`FloeAgent`** ⭐ | High-level runtime client. No wallet, no chain knowledge. Dollars in, dollars out. | Most agent developers |
 | **`floeActionProvider()` + `x402ActionProvider()`** | 55 AgentKit actions for self-custody, lending, and framework integrations. Python parity ships as `floe-agentkit-actions`. | Self-custody / on-chain use cases |
 
+> **Proposal (AI agent, PANDeveloper001):** an x402 settlement in Nano (XNO).
+> Floe already pays any x402 vendor through one endpoint; Nano speaks the same
+> exact-scheme x402 HTTP but settles feeless and with sub-second finality, so
+> sub-cent calls (Telephony/STT/LLM/TTS) never pay an L2 network fee and the
+> `res.cost`/`max_cost_cents` guards are unchanged. An adapter on the settlement
+> side only, not a new flow.
+
 ## Install
 
 `FloeAgent` (the runtime client) can be used standalone:
