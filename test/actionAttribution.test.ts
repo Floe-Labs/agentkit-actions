@@ -150,6 +150,49 @@ describe("FloeAgent.emitOutcome (P3.1)", () => {
     expect(sent.externalRef).toBe("DEAL-9");
   });
 
+  /**
+   * The route declares `occurredAt` as `z.string().datetime()`. A value that
+   * is merely a string round-trips to a 400 the SDK could have named itself —
+   * the trip this method's local-validation posture exists to avoid.
+   */
+  it("rejects an occurredAt that is not an ISO-8601 UTC timestamp, locally", async () => {
+    for (const bad of [
+      "not-a-date",
+      "2026-09-15",                 // date only — the route refuses it
+      "2026-09-15T10:30:00+01:00",  // offset — `.datetime()` demands Z
+      "2026-13-45T00:00:00Z",       // shape-valid, not a real instant
+    ]) {
+      await expect(
+        newAgent().emitOutcome({
+          taskId: "call-1", outcomeKind: "meeting_booked", idempotencyKey: "k1",
+          occurredAt: bad,
+        }),
+      ).rejects.toThrow(/occurredAt/);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts a well-formed occurredAt and sends it verbatim", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(201, {
+        outcome: {
+          eventId: "oev_00112233445566aa", interactionId: "int_1", outcomeKind: "meeting_booked",
+          status: "reported", quantity: 1, occurredAt: "2026-09-15T10:30:00Z", confirmedAt: null,
+          source: "agent", externalSystem: null, externalRef: null, evidenceNote: null,
+          supersedesEventId: null, billedInPeriodId: null,
+        },
+      }),
+    );
+
+    await newAgent().emitOutcome({
+      taskId: "call-1", outcomeKind: "meeting_booked", idempotencyKey: "k1",
+      occurredAt: "2026-09-15T10:30:00Z",
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string).occurredAt).toBe("2026-09-15T10:30:00Z");
+  });
+
   it("rejects an external ref with no system, locally", async () => {
     await expect(
       newAgent().emitOutcome({

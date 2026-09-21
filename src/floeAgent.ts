@@ -634,8 +634,24 @@ export class FloeAgent {
         400,
       );
     }
-    if (emission.occurredAt !== undefined && typeof emission.occurredAt !== "string") {
-      throw new FloeAgentError("occurredAt must be an ISO-8601 string.", 400);
+    if (emission.occurredAt !== undefined) {
+      // The route declares this `z.string().datetime()` — RFC-3339 with a Z,
+      // so neither "2026-09-15" nor a +01:00 offset is accepted there. A
+      // looser check here (a bare Date.parse, say) would pass values the
+      // server then rejects, which is the round trip this method exists to
+      // avoid. The second test catches a shape-valid non-date: "2026-13-45…"
+      // matches the pattern and is still not an instant.
+      const ts: unknown = emission.occurredAt;
+      if (
+        typeof ts !== "string"
+        || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/.test(ts)
+        || Number.isNaN(Date.parse(ts))
+      ) {
+        throw new FloeAgentError(
+          `occurredAt must be an ISO-8601 UTC timestamp like 2026-09-15T10:30:00Z (got ${String(ts)}).`,
+          400,
+        );
+      }
     }
     if (
       emission.externalSystem !== undefined
