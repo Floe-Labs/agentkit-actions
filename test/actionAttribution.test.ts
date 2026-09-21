@@ -79,6 +79,127 @@ describe("FloeAgent.fetch — attribution tags (FLO-633)", () => {
   });
 });
 
+describe("FloeAgent.emitOutcome (P3.1)", () => {
+  it("POSTs the claim and returns it", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(201, {
+        outcome: {
+          eventId: "oev_00112233445566aa",
+          interactionId: "int_00112233445566bb",
+          outcomeKind: "meeting_booked",
+          status: "reported",
+          quantity: 1,
+          occurredAt: "2026-09-15T00:00:00Z",
+          confirmedAt: null,
+          source: "agent",
+          externalSystem: null,
+          externalRef: null,
+          evidenceNote: null,
+          supersedesEventId: null,
+          billedInPeriodId: null,
+        },
+      }),
+    );
+
+    const claim = await newAgent().emitOutcome({
+      taskId: "call-8821",
+      outcomeKind: "meeting_booked",
+      idempotencyKey: "call-8821:meeting_booked",
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`${BASE_URL}/v1/agents/outcomes`);
+    expect(init.method).toBe("POST");
+    // Omitted optionals are ABSENT, not null — the route is `.strict()`.
+    expect(JSON.parse(init.body as string)).toEqual({
+      taskId: "call-8821",
+      outcomeKind: "meeting_booked",
+      idempotencyKey: "call-8821:meeting_booked",
+    });
+    expect(claim.eventId).toBe("oev_00112233445566aa");
+    expect(claim.status).toBe("reported");
+    expect(claim.confirmedAt).toBeNull();
+  });
+
+  it("sends the evidence allowlist when given", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(201, {
+        outcome: {
+          eventId: "oev_00112233445566aa", interactionId: "int_1", outcomeKind: "meeting_booked",
+          status: "reported", quantity: 2, occurredAt: "2026-09-15T00:00:00Z", confirmedAt: null,
+          source: "agent", externalSystem: "hubspot", externalRef: "DEAL-9", evidenceNote: null,
+          supersedesEventId: null, billedInPeriodId: null,
+        },
+      }),
+    );
+
+    await newAgent().emitOutcome({
+      taskId: "call-8821",
+      outcomeKind: "meeting_booked",
+      idempotencyKey: "k1",
+      quantity: 2,
+      externalSystem: "hubspot",
+      externalRef: "DEAL-9",
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const sent = JSON.parse(init.body as string);
+    expect(sent.quantity).toBe(2);
+    // Verbatim: a CRM id is case-sensitive, and equality on this pair is what
+    // proves two claims are one fact.
+    expect(sent.externalRef).toBe("DEAL-9");
+  });
+
+  it("rejects an external ref with no system, locally", async () => {
+    await expect(
+      newAgent().emitOutcome({
+        taskId: "call-1", outcomeKind: "meeting_booked", idempotencyKey: "k1",
+        externalRef: "DEAL-9",
+      }),
+    ).rejects.toThrow(/externalRef requires externalSystem/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("validates outcomeKind and quantity locally", async () => {
+    await expect(
+      newAgent().emitOutcome({
+        taskId: "call-1", outcomeKind: "x".repeat(65), idempotencyKey: "k1",
+      }),
+    ).rejects.toThrow(/outcomeKind/);
+    await expect(
+      newAgent().emitOutcome({
+        taskId: "call-1", outcomeKind: "meeting_booked", idempotencyKey: "k1", quantity: 0,
+      }),
+    ).rejects.toThrow(/quantity/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // The key may be longer than an attribution tag. Rejecting one the API
+  // would have accepted is a client bug, not strictness.
+  it("accepts an idempotency key longer than a tag but caps it at 200", async () => {
+    await expect(
+      newAgent().emitOutcome({
+        taskId: "call-1", outcomeKind: "meeting_booked", idempotencyKey: "k".repeat(201),
+      }),
+    ).rejects.toThrow(/idempotencyKey/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a refused task id as a typed error", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(404, {
+        error: "task_not_found",
+        message: "No call in your account carries this task id yet.",
+      }),
+    );
+    await expect(
+      newAgent().emitOutcome({
+        taskId: "never-happened", outcomeKind: "meeting_booked", idempotencyKey: "k1",
+      }),
+    ).rejects.toMatchObject({ status: 404, code: "task_not_found" });
+  });
+});
+
 describe("FloeAgent.reportOutcome (FLO-633)", () => {
   it("POSTs the outcome and returns the stored result", async () => {
     fetchMock.mockResolvedValueOnce(

@@ -52,6 +52,10 @@ export type {
   CapScope,
   OutcomeReport,
   OutcomeResult,
+  OutcomeEmission,
+  OutcomeClaim,
+  OutcomeClaimStatus,
+  OutcomeClaimSource,
   BalanceResult,
   TransactionsResult,
 } from "./floeAgent.js";

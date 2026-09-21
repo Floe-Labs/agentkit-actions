@@ -131,6 +131,78 @@ export interface OutcomeResult {
   };
 }
 
+/**
+ * P3.1 — what you emit when something billable HAPPENED on a call.
+ *
+ * Distinct from `OutcomeReport` above, which is your own eval signal for a
+ * tagged action. This one is the invoice-grade claim: "a meeting was booked
+ * on this task". The two share a word and nothing else.
+ */
+export interface OutcomeEmission {
+  /** The `X-Floe-Task-Id` this outcome is about. Floe resolves it to the
+   *  call; a task id that names no call is REFUSED (404), never stored
+   *  unattached. */
+  taskId: string;
+  /** Opaque, ≤64 chars. Floe never interprets it — what a kind is WORTH
+   *  lives on your operator's rate card, not here. */
+  outcomeKind: string;
+  /** Required. Emitters retry; a replay must be a no-op, so every emit
+   *  carries a key that makes the second one idempotent. */
+  idempotencyKey: string;
+  /** Two meetings booked on one call is quantity 2 on ONE claim, not two
+   *  claims. Defaults to 1. */
+  quantity?: number;
+  /** ISO-8601. When the outcome HAPPENED. Defaults to now. Distinct from the
+   *  billing anchor, which only an operator's confirmation sets. */
+  occurredAt?: string;
+  /** Corroboration, as an allowlist rather than a free-form bag. */
+  externalSystem?: string;
+  /** Stored VERBATIM — CRM and calendar ids are case-sensitive, and equality
+   *  on (externalSystem, externalRef) is what PROVES two claims are one
+   *  fact. Requires `externalSystem`. */
+  externalRef?: string;
+  /** Free text, ≤500 chars. */
+  note?: string;
+}
+
+/** Lifecycle of a claim. An agent key only ever produces `reported`. */
+export type OutcomeClaimStatus =
+  | "reported"
+  | "confirmed"
+  | "disputed"
+  | "void"
+  | "reversed";
+
+/** WHO asserted a claim, stamped at write and never recomputed. */
+export type OutcomeClaimSource =
+  | "agent"
+  | "operator"
+  | "orchestrator"
+  | "client"
+  | "floe";
+
+/** The stored claim, as returned by `emitOutcome`. */
+export interface OutcomeClaim {
+  eventId: string;
+  /** The call this claim was bound to. */
+  interactionId: string | null;
+  outcomeKind: string;
+  status: OutcomeClaimStatus;
+  quantity: number;
+  occurredAt: string | null;
+  /** The billing anchor. Null until an OPERATOR confirms — emitting never
+   *  sets it, because confirming is what makes a claim billable. */
+  confirmedAt: string | null;
+  source: OutcomeClaimSource;
+  externalSystem: string | null;
+  externalRef: string | null;
+  evidenceNote: string | null;
+  /** The claim this one corrected; null on a first claim. */
+  supersedesEventId: string | null;
+  /** Set once a period close has billed it — the claim is then frozen. */
+  billedInPeriodId: number | null;
+}
+
 /** Spend-cap dimension the advisory's tightest cap is keyed to. */
 export type CapScope = "credit_line" | "session" | "task" | "api" | "vendor" | "key";
 
@@ -497,6 +569,116 @@ export class FloeAgent {
         body,
       );
     }
+  }
+
+  /**
+   * Emit an outcome for a task; Floe binds it to the call (P3.1).
+   *
+   * Tag your paid calls with a task id, then say what the task PRODUCED —
+   *
+   *     await agent.fetch({ url, taskId: 'call-8821' });
+   *     await agent.emitOutcome({
+   *       taskId: 'call-8821',
+   *       outcomeKind: 'meeting_booked',
+   *       idempotencyKey: 'call-8821:meeting_booked',
+   *     });
+   *
+   * — and cost and outcome sit on one row, which is what makes
+   * cost-per-outcome a number rather than an estimate.
+   *
+   * NOT `reportOutcome`. That is your own eval signal for a tagged action and
+   * never reaches an invoice. This is the billable claim. They share a word
+   * and nothing else.
+   *
+   * AN AGENT KEY MAY ONLY REPORT. Confirming a claim, voiding one and
+   * resolving a collision are operator acts on the developer surface: they
+   * move money, and the evidence that justifies them — a CRM webhook, a
+   * calendar invitation — reaches your backend minutes to days after the call,
+   * never this process. There is deliberately no `status` argument here.
+   *
+   * A task id that names no call is REFUSED (404) rather than stored
+   * unattached, because an outcome nothing can bill is worse than no outcome:
+   * it looks like one.
+   */
+  async emitOutcome(emission: OutcomeEmission): Promise<OutcomeClaim> {
+    // Typed, but a JS caller can hand us anything — guard the shape so a bad
+    // argument is a FloeAgentError like every other validation failure.
+    const given: unknown = emission;
+    if (typeof given !== "object" || given === null) {
+      throw new FloeAgentError(
+        `emission must be an object (got ${given === null ? "null" : typeof given}).`,
+        400,
+      );
+    }
+    const taskId = validateTag("taskId", emission.taskId);
+
+    const kind: unknown = emission.outcomeKind;
+    if (typeof kind !== "string" || kind.trim().length === 0 || kind.trim().length > 64) {
+      throw new FloeAgentError("outcomeKind must be 1..64 characters after trimming.", 400);
+    }
+    const outcomeKind = kind.trim();
+
+    // Capped at the server's 200, NOT at validateTag's 128 — rejecting a key
+    // the API would have accepted is a bug in the client, not strictness.
+    const key: unknown = emission.idempotencyKey;
+    if (typeof key !== "string" || key.length === 0 || key.length > 200) {
+      throw new FloeAgentError("idempotencyKey must be 1..200 characters.", 400);
+    }
+
+    if (
+      emission.quantity !== undefined
+      && (!Number.isInteger(emission.quantity) || emission.quantity < 1)
+    ) {
+      throw new FloeAgentError(
+        `quantity must be an integer of at least 1 (got ${emission.quantity}).`,
+        400,
+      );
+    }
+    if (emission.occurredAt !== undefined && typeof emission.occurredAt !== "string") {
+      throw new FloeAgentError("occurredAt must be an ISO-8601 string.", 400);
+    }
+    if (
+      emission.externalSystem !== undefined
+      && (typeof emission.externalSystem !== "string"
+        || emission.externalSystem.length === 0
+        || emission.externalSystem.length > 64)
+    ) {
+      throw new FloeAgentError("externalSystem must be 1..64 characters.", 400);
+    }
+    if (
+      emission.externalRef !== undefined
+      && (typeof emission.externalRef !== "string"
+        || emission.externalRef.length === 0
+        || emission.externalRef.length > 256)
+    ) {
+      throw new FloeAgentError("externalRef must be 1..256 characters.", 400);
+    }
+    // The server's CHECK constraint says the same thing; failing here names
+    // the actual mistake instead of returning a constraint message.
+    if (emission.externalRef !== undefined && emission.externalSystem === undefined) {
+      throw new FloeAgentError("externalRef requires externalSystem.", 400);
+    }
+    if (
+      emission.note !== undefined
+      && (typeof emission.note !== "string" || emission.note.length > 500)
+    ) {
+      throw new FloeAgentError("note must be a string of at most 500 characters.", 400);
+    }
+
+    const resp = await this.request("POST", "/v1/agents/outcomes", {
+      taskId,
+      outcomeKind,
+      idempotencyKey: emission.idempotencyKey,
+      // JSON.stringify drops undefined, and the route is `.strict()` — so an
+      // omitted field is absent rather than null.
+      quantity: emission.quantity,
+      occurredAt: emission.occurredAt,
+      externalSystem: emission.externalSystem,
+      externalRef: emission.externalRef,
+      note: emission.note,
+    });
+    const { outcome } = await this.parseJson<{ outcome: OutcomeClaim }>(resp, "emitOutcome");
+    return outcome;
   }
 
   /**
