@@ -55,7 +55,7 @@
   },
   "dependencies": {
     "viem": "^2.0.0",
-    "zod": "^3.22.0",
+    "zod": "^4.6.6",
     "ai": "^6.0.116",
     "@ai-sdk/openai": "^3.0.41",
     "@ai-sdk/anthropic": "^4.0.49",
